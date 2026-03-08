@@ -1,0 +1,238 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Play Stockfish</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="arena">
+        <section class="panel board-stage">
+          <div class="player-card">
+            <div class="player-heading">
+              <p class="player-role">Engine</p>
+              <div class="player-label-row">
+                <strong id="engine-card-label">Stockfish plays Black</strong>
+                <span id="engine-result-crown" class="result-crown" hidden aria-hidden="true">
+                  <svg class="result-crown__icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path d="M4 19h16l-1.3-7.6-4 3.7L12 6l-2.7 9.1-4-3.7L4 19zm2 2h12v-1.5H6z"></path>
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <div id="captured-black" class="captured-row" aria-label="Black pieces you have captured"></div>
+          </div>
+
+          <div class="board-cluster">
+            <div class="eval-meter" id="eval-meter" aria-hidden="true">
+              <span class="eval-meter__label" id="eval-meter-label">0.00</span>
+            </div>
+
+            <div class="board-shell" id="board-shell">
+              <svg id="board-arrows" class="board-arrows" viewBox="0 0 800 800" aria-hidden="true">
+                <defs>
+                  <marker
+                    id="arrow-head"
+                    markerWidth="18"
+                    markerHeight="18"
+                    refX="6.5"
+                    refY="9"
+                    orient="auto"
+                    markerUnits="userSpaceOnUse"
+                  >
+                    <path d="M 0 1 L 17 9 L 0 17 z"></path>
+                  </marker>
+                  <marker
+                    id="arrow-head-draft"
+                    markerWidth="18"
+                    markerHeight="18"
+                    refX="6.5"
+                    refY="9"
+                    orient="auto"
+                    markerUnits="userSpaceOnUse"
+                  >
+                    <path d="M 0 1 L 17 9 L 0 17 z"></path>
+                  </marker>
+                </defs>
+                <g id="arrow-layer"></g>
+              </svg>
+              <div id="board" class="board" aria-label="Interactive chessboard"></div>
+              <div id="result-overlay" class="game-result-overlay" hidden>
+                <div class="game-result-overlay__card" role="status" aria-live="polite">
+                  <h2 id="result-overlay-title">You won</h2>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="player-card">
+            <div class="player-heading">
+              <p class="player-role">You</p>
+              <div class="player-label-row">
+                <strong id="player-card-label">You play White</strong>
+                <span id="player-result-crown" class="result-crown" hidden aria-hidden="true">
+                  <svg class="result-crown__icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path d="M4 19h16l-1.3-7.6-4 3.7L12 6l-2.7 9.1-4-3.7L4 19zm2 2h12v-1.5H6z"></path>
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <div id="captured-white" class="captured-row" aria-label="White pieces Stockfish has captured"></div>
+          </div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="panel control-panel">
+            <p class="eyebrow">Local Flask + Stockfish</p>
+            <h1>Play Stockfish</h1>
+            <p class="lead">
+              A polished local board running on your engine. Move by click or drag, switch
+              sides instantly, and scrub through the played game without changing the real position.
+            </p>
+
+            <div class="side-picker" role="group" aria-label="Choose your side">
+              <button id="play-white" class="side-button side-button--active" type="button">Play White</button>
+              <button id="play-black" class="side-button" type="button">Play Black</button>
+            </div>
+
+            <div class="control-grid">
+              <label class="field" for="skill_level">
+                <span>Skill level</span>
+                <input id="skill_level" name="skill_level" type="number" min="0" max="20" value="{{ default_skill_level }}">
+              </label>
+
+              <label class="field" for="depth">
+                <span>Depth</span>
+                <input id="depth" name="depth" type="number" min="1" max="25" value="{{ default_depth }}">
+              </label>
+            </div>
+
+            <div class="button-row">
+              <button id="new-game" class="action-button" type="button">New game</button>
+              <button id="flip-board" class="action-button action-button--secondary" type="button">Flip board</button>
+            </div>
+
+            <p class="engine-path">
+              Stockfish runs locally from the default `stockfish/` folder or the `STOCKFISH_PATH`
+              environment variable.
+            </p>
+          </section>
+
+          <section class="panel status-panel">
+            <div class="status-head">
+              <div>
+                <p class="meta-label">Game status</p>
+                <h2 id="status-text">Your move.</h2>
+              </div>
+              <span id="turn-indicator" class="badge">White to move</span>
+            </div>
+
+            <div class="stat-grid">
+              <div class="stat-card">
+                <span>Engine move</span>
+                <strong id="engine-move">-</strong>
+              </div>
+
+              <div class="stat-card">
+                <span>Evaluation</span>
+                <strong id="evaluation-text">0.00</strong>
+              </div>
+            </div>
+
+            <label class="field field--textarea" for="fen-output">
+              <span>Current FEN</span>
+              <textarea id="fen-output" name="fen-output" rows="4" readonly>{{ default_fen }}</textarea>
+            </label>
+
+            <div class="button-row button-row--single">
+              <button id="download-pgn" class="action-button action-button--secondary" type="button">
+                Download PGN
+              </button>
+            </div>
+            <p class="panel-note panel-note--support">Finished games save automatically below.</p>
+
+            <p id="error" class="error" role="alert"></p>
+          </section>
+
+          <section class="panel moves-panel">
+            <div class="panel-head">
+              <div>
+                <p class="meta-label">Moves</p>
+                <h2>Move list</h2>
+              </div>
+              <div class="history-controls" role="group" aria-label="Move navigation">
+                <button id="history-back" class="history-button" type="button" aria-label="Previous move">&larr;</button>
+                <span id="history-label" class="panel-note">Live</span>
+                <button id="history-forward" class="history-button" type="button" aria-label="Next move">&rarr;</button>
+              </div>
+            </div>
+            <div id="move-list" class="move-list">
+              <p class="move-list__empty">Make the first move.</p>
+            </div>
+          </section>
+
+          <section class="panel hint-panel">
+            <p class="meta-label">Controls</p>
+            <h2>How to move</h2>
+            <p>
+              Click a piece and then a highlighted square, or drag it. While Stockfish is thinking, you can
+              set one premove and it will show in red. Right-click a square to mark it red, or right-drag
+              to draw arrows. Left click clears board annotations. Use the on-screen arrows or your keyboard's
+              left and right keys to review the game.
+            </p>
+          </section>
+
+          <section class="panel saved-panel">
+            <div class="panel-head">
+              <div>
+                <p class="meta-label">Archive</p>
+                <h2>Saved games</h2>
+              </div>
+              <span id="saved-games-count" class="panel-note">0 saved</span>
+            </div>
+            <div id="saved-games" class="saved-games">
+              <p class="saved-games__empty">Finished games will appear here.</p>
+            </div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <section id="promotion-dialog" class="promotion-dialog" hidden>
+      <div class="promotion-dialog__card" role="dialog" aria-modal="true" aria-labelledby="promotion-title">
+        <p class="meta-label">Promotion</p>
+        <h2 id="promotion-title">Choose a piece</h2>
+        <div id="promotion-options" class="promotion-options"></div>
+        <button id="cancel-promotion" class="action-button action-button--secondary" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <script>
+      window.CHESS_BOOTSTRAP = {{ {
+        "initialState": initial_state,
+        "defaultSkillLevel": default_skill_level,
+        "defaultDepth": default_depth,
+        "savedGames": saved_games,
+        "soundFiles": sound_files,
+        "pieceImages": {
+          "P": url_for('static', filename='images/white_pawn.png'),
+          "N": url_for('static', filename='images/white_knight.png'),
+          "B": url_for('static', filename='images/white_bishop.png'),
+          "R": url_for('static', filename='images/white_rook.png'),
+          "Q": url_for('static', filename='images/white_queen.png'),
+          "K": url_for('static', filename='images/white_king.png'),
+          "p": url_for('static', filename='images/black_pawn.png'),
+          "n": url_for('static', filename='images/black_knight.png'),
+          "b": url_for('static', filename='images/black_bishop.png'),
+          "r": url_for('static', filename='images/black_rook.png'),
+          "q": url_for('static', filename='images/black_queen.png'),
+          "k": url_for('static', filename='images/black_king.png')
+        }
+      } | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+stockfish/
+env/
+__pycache__/
+*.py[cod]
+.env
+AGENTS.md
+static/sounds/
+games.db
+*.db-shm
+*.db-wal
+*.db-journal
+AGENTS.md
