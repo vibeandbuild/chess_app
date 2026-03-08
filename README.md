@@ -4,6 +4,8 @@ A local-first Flask chess app for playing against Stockfish in the browser.
 
 It includes an interactive board, move history, evaluation display, saved finished games, and PGN export, while keeping the engine and local data on your own machine.
 
+![Chess App screenshot](image.png)
+
 ## Features
 
 - Play full games against a locally available Stockfish engine

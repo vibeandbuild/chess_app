@@ -94,6 +94,9 @@ const state = {
   suppressNextClick: false,
   transitioning: false,
   premove: null,
+  premoveLegalMoves: [],
+  premoveLegalMovesFen: null,
+  premoveRequestSerial: 0,
   markedSquares: [],
   arrows: [],
   arrowDraft: null,
@@ -276,6 +279,20 @@ function canInteractWithPieces() {
   return canMovePieces() || canQueuePremove();
 }
 
+function clearPremoveLegalMoves() {
+  state.premoveLegalMoves = [];
+  state.premoveLegalMovesFen = null;
+}
+
+function getCurrentPremoveLegalMoves() {
+  const board = getDisplayBoard();
+  if (!canQueuePremove() || state.premoveLegalMovesFen !== board.fen) {
+    return [];
+  }
+
+  return state.premoveLegalMoves;
+}
+
 function getPremoveSquares() {
   if (!state.premove || !isLatestView()) {
     return new Map();
@@ -285,6 +302,10 @@ function getPremoveSquares() {
     [state.premove.from, "source"],
     [state.premove.to, "target"],
   ]);
+}
+
+function isPremoveSourceSquare(square) {
+  return Boolean(state.premove && isLatestView() && square === state.premove.from);
 }
 
 function getPremovePreviewPiece(square, boardMap) {
@@ -316,6 +337,57 @@ function buildPremoveUci(from, to, boardState = getDisplayBoard()) {
 
 function clearPremove() {
   state.premove = null;
+}
+
+async function preloadPremoveLegalMoves(fen = getLiveBoard().fen) {
+  if (!fen) {
+    clearPremoveLegalMoves();
+    return [];
+  }
+
+  if (state.premoveLegalMovesFen === fen) {
+    return state.premoveLegalMoves;
+  }
+
+  const requestId = state.premoveRequestSerial + 1;
+  state.premoveRequestSerial = requestId;
+
+  try {
+    const data = await fetchJson("/api/premove-moves", {
+      fen,
+      player_color: state.playerColor,
+    });
+
+    if (requestId !== state.premoveRequestSerial || getLiveBoard().fen !== fen) {
+      return [];
+    }
+
+    state.premoveLegalMoves = Array.isArray(data.legal_moves) ? data.legal_moves : [];
+    state.premoveLegalMovesFen = fen;
+
+    if (canQueuePremove()) {
+      render();
+    }
+
+    return state.premoveLegalMoves;
+  } catch {
+    if (requestId === state.premoveRequestSerial) {
+      clearPremoveLegalMoves();
+      if (canQueuePremove()) {
+        render();
+      }
+    }
+    return [];
+  }
+}
+
+async function ensurePremoveLegalMoves() {
+  const fen = getLiveBoard().fen;
+  if (state.premoveLegalMovesFen === fen) {
+    return state.premoveLegalMoves;
+  }
+
+  return preloadPremoveLegalMoves(fen);
 }
 
 function setPremove(from, to, options = {}) {
@@ -994,6 +1066,37 @@ function resultOverlayTitle(boardState) {
   return "";
 }
 
+function getResultKingCrowns(boardState, boardMap) {
+  if (!isLatestView() || !boardState?.game_over || boardState.result === "1/2-1/2") {
+    return new Map();
+  }
+
+  const crowns = new Map();
+  const whiteKingSquare = [...boardMap.entries()].find(([, piece]) => piece === "K")?.[0];
+  const blackKingSquare = [...boardMap.entries()].find(([, piece]) => piece === "k")?.[0];
+
+  if (boardState.result === "1-0") {
+    if (whiteKingSquare) {
+      crowns.set(whiteKingSquare, "win");
+    }
+    if (blackKingSquare) {
+      crowns.set(blackKingSquare, "loss");
+    }
+    return crowns;
+  }
+
+  if (boardState.result === "0-1") {
+    if (whiteKingSquare) {
+      crowns.set(whiteKingSquare, "loss");
+    }
+    if (blackKingSquare) {
+      crowns.set(blackKingSquare, "win");
+    }
+  }
+
+  return crowns;
+}
+
 function setCrownState(element, outcome) {
   element.hidden = !outcome;
   element.className = "result-crown";
@@ -1073,10 +1176,14 @@ async function appendLiveSnapshot(boardState, moveUci, requestId, options = {}) 
 function renderBoard() {
   const board = getDisplayBoard();
   const boardMap = parseFenBoard(board.fen);
-  const moveIndex = buildMoveIndex(board.legal_moves);
+  const availableMoves = canMovePieces()
+    ? board.legal_moves
+    : getCurrentPremoveLegalMoves();
+  const moveIndex = buildMoveIndex(availableMoves);
   const targetMap = getSelectedTargets(moveIndex);
   const lastMoveSquares = getLastMoveSquares();
   const premoveSquares = getPremoveSquares();
+  const resultKingCrowns = getResultKingCrowns(board, boardMap);
   const files = getVisibleFiles();
   const ranks = getVisibleRanks();
 
@@ -1087,6 +1194,7 @@ function renderBoard() {
       const square = `${file}${rank}`;
       const piece = boardMap.get(square);
       const premovePreviewPiece = getPremovePreviewPiece(square, boardMap);
+      const renderedPiece = isPremoveSourceSquare(square) ? null : (premovePreviewPiece || piece);
       const targetMoves = targetMap.get(square) || [];
 
       const button = document.createElement("button");
@@ -1163,23 +1271,28 @@ function renderBoard() {
         button.append(annotation);
       }
 
-      if (piece) {
+      if (renderedPiece) {
         const image = document.createElement("img");
-        image.className = "piece";
-        image.src = pieceImage(piece);
-        image.alt = pieceName(piece);
-        image.dataset.square = square;
+        image.className = premovePreviewPiece ? "piece piece--premove-preview" : "piece";
+        image.src = pieceImage(renderedPiece);
+        image.alt = premovePreviewPiece ? `${pieceName(renderedPiece)} premove` : pieceName(renderedPiece);
+        if (!premovePreviewPiece) {
+          image.dataset.square = square;
+        }
         image.draggable = false;
         button.append(image);
       }
 
-      if (premovePreviewPiece) {
-        const preview = document.createElement("img");
-        preview.className = "piece piece--premove-preview";
-        preview.src = pieceImage(premovePreviewPiece);
-        preview.alt = `${pieceName(premovePreviewPiece)} premove preview`;
-        preview.draggable = false;
-        button.append(preview);
+      if (resultKingCrowns.has(square)) {
+        const crown = document.createElement("span");
+        crown.className = `king-result-crown king-result-crown--${resultKingCrowns.get(square)}`;
+        crown.setAttribute("aria-hidden", "true");
+        crown.innerHTML = `
+          <svg class="king-result-crown__icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M4 19h16l-1.3-7.6-4 3.7L12 6l-2.7 9.1-4-3.7L4 19zm2 2h12v-1.5H6z"></path>
+          </svg>
+        `;
+        button.append(crown);
       }
 
       refs.board.append(button);
@@ -1332,6 +1445,22 @@ function renderPromotionDialog() {
   });
 }
 
+function renderGameResult() {
+  const board = getDisplayBoard();
+  const visible = isLatestView() && board.game_over;
+  refs.resultOverlay.hidden = !visible;
+  setCrownState(refs.playerResultCrown, null);
+  setCrownState(refs.engineResultCrown, null);
+
+  if (!visible) {
+    refs.resultOverlayTitle.textContent = "";
+    return;
+  }
+
+  const playerResult = derivePlayerResult(board);
+  refs.resultOverlayTitle.textContent = resultOverlayTitle(board);
+}
+
 function setEvaluation(evaluation) {
   const currentEvaluation = evaluation || equalEvaluation();
   const label = currentEvaluation.label ?? "n/a";
@@ -1417,6 +1546,7 @@ function render() {
   renderMoveList();
   renderSavedGames();
   renderPromotionDialog();
+  renderGameResult();
   renderSidePicker();
   renderHistoryControls();
   refs.statusText.textContent = deriveStatusText();
@@ -1447,7 +1577,7 @@ function chooseMove(moveOptions, options = {}) {
   });
 }
 
-function handleSquareChoice(square) {
+async function handleSquareChoice(square) {
   const boardMap = parseFenBoard(getDisplayBoard().fen);
   const piece = boardMap.get(square);
   const premoveMode = canQueuePremove();
@@ -1457,6 +1587,9 @@ function handleSquareChoice(square) {
   }
 
   if (premoveMode) {
+    const premoveMoves = await ensurePremoveLegalMoves();
+    const premoveMoveIndex = buildMoveIndex(premoveMoves);
+
     if (state.selectedSquare) {
       if (square === state.selectedSquare) {
         state.selectedSquare = null;
@@ -1470,11 +1603,19 @@ function handleSquareChoice(square) {
         return;
       }
 
-      setPremove(state.selectedSquare, square, { inputMethod: "click" });
+      const matchingMoves = (premoveMoveIndex.get(state.selectedSquare) || []).filter(
+        (move) => move.to === square,
+      );
+      if (matchingMoves.length) {
+        setPremove(state.selectedSquare, square, { inputMethod: "click" });
+        return;
+      }
+
+      playSound("illegal");
       return;
     }
 
-    if (piece && isPlayerPiece(piece)) {
+    if (piece && isPlayerPiece(piece) && premoveMoveIndex.has(square)) {
       state.error = "";
       state.selectedSquare = square;
       render();
@@ -1562,6 +1703,7 @@ async function requestEngineTurn(fen, requestId) {
   state.evaluation = data.evaluation_details || equalEvaluation();
   if (data.board.game_over) {
     clearPremove();
+    clearPremoveLegalMoves();
     await maybeSaveCompletedGame(data.board);
     state.busy = false;
     render();
@@ -1580,6 +1722,7 @@ async function requestEngineTurn(fen, requestId) {
     }
   }
 
+  clearPremoveLegalMoves();
   state.busy = false;
   render();
   return true;
@@ -1633,11 +1776,13 @@ async function submitPlayerMove(uci, options = {}) {
       state.busy = false;
       state.evaluation = emptyEvaluation();
       state.lastEngineMove = "-";
+      clearPremoveLegalMoves();
       await maybeSaveCompletedGame(data.board);
       render();
       return;
     }
 
+    void preloadPremoveLegalMoves(data.board.fen);
     await requestEngineTurn(data.board.fen, requestId);
   } catch (error) {
     if (requestId !== state.requestSerial) {
@@ -1669,6 +1814,7 @@ async function startNewGame(playerColor = state.playerColor, preserveOrientation
   clearPieceDrag();
   state.transitioning = false;
   clearPremove();
+  clearPremoveLegalMoves();
   state.arrows = [];
   state.arrowDraft = null;
   state.savedGameId = null;
@@ -1680,6 +1826,7 @@ async function startNewGame(playerColor = state.playerColor, preserveOrientation
     return;
   }
 
+  void preloadPremoveLegalMoves(bootstrap.initialState.fen);
   try {
     await requestEngineTurn(bootstrap.initialState.fen, requestId);
   } catch (error) {
@@ -1777,7 +1924,7 @@ function handleBoardClick(event) {
   const clearedAnnotations = clearAnnotations();
 
   if (square) {
-    handleSquareChoice(square);
+    void handleSquareChoice(square);
     return;
   }
 
@@ -1835,7 +1982,7 @@ function handleBoardMouseUp(event) {
   finishArrow(square);
 }
 
-function handleDocumentMouseUp(event) {
+async function handleDocumentMouseUp(event) {
   if (event.button === 2) {
     cancelArrowDraft();
     return;
@@ -1862,8 +2009,15 @@ function handleDocumentMouseUp(event) {
     }
 
     if (canQueuePremove() && targetSquare && sourceSquare && targetSquare !== sourceSquare) {
-      setPremove(sourceSquare, targetSquare, { inputMethod: "drag" });
-      return;
+      const premoveMoves = await ensurePremoveLegalMoves();
+      const premoveMoveIndex = buildMoveIndex(premoveMoves);
+      const premoveMatches = (premoveMoveIndex.get(sourceSquare) || []).filter(
+        (move) => move.to === targetSquare,
+      );
+      if (premoveMatches.length) {
+        setPremove(sourceSquare, targetSquare, { inputMethod: "drag" });
+        return;
+      }
     }
 
     if (targetSquare && sourceSquare && targetSquare !== sourceSquare) {

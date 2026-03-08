@@ -540,6 +540,16 @@ def apply_player_move(board: chess.Board, move_text: str, player_color: str) -> 
     }
 
 
+def list_premove_moves(board: chess.Board, player_color: str) -> dict[str, Any]:
+    premove_board = board.copy(stack=False)
+    premove_board.turn = color_from_name(player_color)
+    return {
+        "fen": board.fen(),
+        "player_color": player_color,
+        "legal_moves": [move.uci() for move in premove_board.legal_moves],
+    }
+
+
 def analyze_position(fen: str, skill_level: int, depth: int) -> dict[str, object]:
     board = chess.Board(fen)
     engine_result = analyze_engine_turn(board=board, skill_level=skill_level, depth=depth)
@@ -602,6 +612,21 @@ def player_move():
         result = apply_player_move(board=board, move_text=move_text, player_color=player_color)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result)
+
+
+@app.post("/api/premove-moves")
+def premove_moves():
+    payload = request.get_json(silent=True) or {}
+    fen = payload.get("fen", chess.STARTING_FEN)
+
+    try:
+        player_color = parse_player_color(payload)
+        board = chess.Board(fen)
+        result = list_premove_moves(board=board, player_color=player_color)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid request: {exc}"}), 400
 
     return jsonify(result)
 
