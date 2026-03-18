@@ -10,8 +10,10 @@ from typing import Any
 import chess
 import chess.engine
 import chess.pgn
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, url_for
 
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_ENGINE_PATH = BASE_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe"
@@ -104,6 +106,47 @@ def parse_starting_fen(payload: dict[str, Any]) -> str:
     except ValueError as exc:
         raise ValueError(f"Invalid FEN: {exc}") from exc
     return fen
+
+
+def parse_result_override(payload: dict[str, Any]) -> dict[str, Any] | None:
+    result = str(payload.get("result_override", "")).strip()
+    if not result:
+        return None
+
+    if result not in {"1-0", "0-1", "1/2-1/2"}:
+        raise ValueError("result_override must be '1-0', '0-1', or '1/2-1/2'")
+
+    winner_raw = payload.get("winner_override")
+    winner = None if winner_raw in {None, ""} else str(winner_raw).strip().lower()
+    if winner not in {None, "white", "black"}:
+        raise ValueError("winner_override must be 'white', 'black', or omitted for draws")
+
+    if result == "1-0" and winner not in {None, "white"}:
+        raise ValueError("winner_override must be 'white' when result_override is '1-0'")
+    if result == "0-1" and winner not in {None, "black"}:
+        raise ValueError("winner_override must be 'black' when result_override is '0-1'")
+    if result == "1/2-1/2" and winner is not None:
+        raise ValueError("winner_override must be omitted when result_override is '1/2-1/2'")
+
+    if winner is None:
+        winner = "white" if result == "1-0" else "black" if result == "0-1" else None
+
+    status = str(payload.get("status_override", "")).strip()
+    if not status:
+        if result == "1-0":
+            status = "White wins."
+        elif result == "0-1":
+            status = "Black wins."
+        else:
+            status = "Draw."
+
+    termination = str(payload.get("termination_override", "")).strip() or status
+    return {
+        "result": result,
+        "winner": winner,
+        "status": status,
+        "termination": termination,
+    }
 
 
 def color_name(color: chess.Color) -> str:
@@ -297,7 +340,10 @@ def build_pgn_payload(
     skill_level, depth = parse_engine_settings(payload)
     moves = parse_move_list(payload)
     starting_fen = parse_starting_fen(payload)
+    result_override = parse_result_override(payload)
     session_id = str(payload.get("session_id", "")).strip()
+    time_control_pgn = str(payload.get("time_control_pgn", "")).strip()
+    time_control_label = str(payload.get("time_control_label", "")).strip()
     now = utc_now()
 
     board = chess.Board(starting_fen)
@@ -310,6 +356,10 @@ def build_pgn_payload(
     game.headers["Black"] = "Stockfish" if player_color == "white" else "You"
     game.headers["StockfishSkillLevel"] = str(skill_level)
     game.headers["StockfishDepth"] = str(depth)
+    if time_control_pgn:
+        game.headers["TimeControl"] = time_control_pgn
+    elif time_control_label:
+        game.headers["TimeControl"] = time_control_label
 
     if starting_fen != chess.STARTING_FEN:
         game.headers["SetUp"] = "1"
@@ -328,13 +378,13 @@ def build_pgn_payload(
         node = node.add_variation(move)
         board.push(move)
 
-    outcome_details = get_outcome_details(board)
+    outcome_details = get_outcome_details(board) or result_override
     if require_finished and outcome_details is None:
         raise ValueError("The game is not finished yet")
 
     game.headers["Result"] = outcome_details["result"] if outcome_details else "*"
     if outcome_details:
-        game.headers["Termination"] = outcome_details["status"]
+        game.headers["Termination"] = outcome_details.get("termination", outcome_details["status"])
 
     exporter = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
     winner = outcome_details["winner"] if outcome_details else None
@@ -388,18 +438,20 @@ def get_saved_game_by_key(game_key: str) -> sqlite3.Row | None:
         return connection.execute("SELECT * FROM games WHERE game_key = ?", (game_key,)).fetchone()
 
 
-def list_saved_games(limit: int = MAX_SAVED_GAMES) -> list[dict[str, Any]]:
+def list_saved_games(limit: int | None = MAX_SAVED_GAMES) -> list[dict[str, Any]]:
     with get_db_connection() as connection:
-        rows = connection.execute(
-            """
+        query = """
             SELECT id, created_at, player_color, skill_level, depth, result, winner,
                    player_result, status, move_count
             FROM games
             ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        """
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            query += "\nLIMIT ?"
+            params = (limit,)
+
+        rows = connection.execute(query, params).fetchall()
 
     return [serialize_saved_game(row) for row in rows]
 
@@ -576,6 +628,11 @@ def index():
         saved_games=list_saved_games(),
         sound_files=get_sound_files(),
     )
+
+
+@app.get("/games")
+def saved_games_page():
+    return render_template("games.html", saved_games=list_saved_games(limit=None))
 
 
 @app.post("/api/engine-move")

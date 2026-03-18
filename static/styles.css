@@ -89,6 +89,15 @@ p {
   z-index: 1;
 }
 
+.app-shell--narrow {
+  width: min(960px, calc(100% - 32px));
+}
+
+.page-stack {
+  display: grid;
+  gap: 24px;
+}
+
 .arena {
   display: grid;
   grid-template-columns: minmax(320px, 860px) minmax(320px, 420px);
@@ -124,6 +133,13 @@ p {
 .player-heading {
   display: grid;
   gap: 4px;
+}
+
+.player-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  min-width: 96px;
 }
 
 .player-role,
@@ -184,6 +200,52 @@ p {
   min-height: 28px;
 }
 
+.player-timer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  min-height: 72px;
+  padding: 10px 12px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 10px 24px rgba(0, 0, 0, 0.18);
+  font-family: "Bahnschrift", "Trebuchet MS", sans-serif;
+  font-size: clamp(1.3rem, 2vw, 1.65rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.16s ease, color 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
+}
+
+.player-timer--white {
+  background: linear-gradient(180deg, #fcfbf6, #d9d7ce);
+  color: #151813;
+}
+
+.player-timer--black {
+  background: linear-gradient(180deg, #20261f, #060806);
+  color: #f7f6f1;
+}
+
+.player-timer--inactive {
+  opacity: 0.62;
+  filter: saturate(0.72);
+}
+
+.player-timer--active {
+  transform: translateY(-1px);
+}
+
+.player-timer.player-timer--low {
+  background: linear-gradient(180deg, #d94b43, #9d1d19);
+  border-color: rgba(255, 210, 210, 0.35);
+  color: #fff;
+  opacity: 1;
+}
+
 .captured-row img {
   width: 26px;
   height: 26px;
@@ -201,6 +263,11 @@ p {
   grid-template-columns: 32px minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
+}
+
+.board-cluster--eval-hidden {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
 }
 
 .eval-meter {
@@ -509,6 +576,19 @@ p {
   padding: 22px;
 }
 
+.setup-summary {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.setup-summary strong {
+  font-size: 1.05rem;
+}
+
 h1 {
   margin-bottom: 10px;
   font-size: clamp(2rem, 3vw, 3rem);
@@ -536,7 +616,7 @@ h2 {
 
 .side-picker {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -575,13 +655,42 @@ h2 {
   gap: 8px;
 }
 
+.field--wide {
+  grid-column: 1 / -1;
+}
+
+.field--toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  background: rgba(7, 10, 8, 0.26);
+}
+
+.field--toggle span {
+  margin-bottom: 0;
+}
+
+.field--toggle input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+
 .field span {
   font-size: 0.9rem;
   font-weight: 600;
 }
 
 .field input,
-.field textarea {
+.field textarea,
+.field select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 16px;
@@ -593,9 +702,23 @@ h2 {
 }
 
 .field input:focus,
-.field textarea:focus {
+.field textarea:focus,
+.field select:focus {
   border-color: rgba(137, 181, 76, 0.55);
   background: rgba(7, 10, 8, 0.42);
+}
+
+.field select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.7) 50%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.7) 50%, transparent 50%);
+  background-position:
+    calc(100% - 20px) calc(50% - 3px),
+    calc(100% - 14px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
 }
 
 .field--textarea textarea {
@@ -612,6 +735,10 @@ h2 {
 
 .button-row--single {
   grid-template-columns: 1fr;
+}
+
+.control-panel > .field--toggle {
+  margin-top: 18px;
 }
 
 .action-button,
@@ -631,10 +758,22 @@ h2 {
   transform: translateY(-1px);
 }
 
+a.action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .action-button--secondary {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.archive-link {
+  width: 100%;
+  margin-top: 18px;
 }
 
 .engine-path {
@@ -887,6 +1026,29 @@ h2 {
   padding-inline: 14px;
 }
 
+.saved-game__download-link {
+  justify-self: start;
+  width: auto;
+  min-width: 0;
+  padding-inline: 14px;
+}
+
+.archive-page {
+  padding: 22px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.page-actions .archive-link {
+  width: auto;
+  margin-top: 0;
+}
+
+.app-dialog,
 .promotion-dialog {
   position: fixed;
   inset: 0;
@@ -898,6 +1060,7 @@ h2 {
   backdrop-filter: blur(8px);
 }
 
+.app-dialog__card,
 .promotion-dialog__card {
   width: min(420px, 100%);
   padding: 24px;
@@ -905,6 +1068,11 @@ h2 {
   background: linear-gradient(180deg, rgba(34, 46, 37, 0.98), rgba(22, 30, 25, 0.98));
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+}
+
+.new-game-dialog__card,
+.position-dialog__card {
+  width: min(560px, 100%);
 }
 
 .promotion-options {
@@ -978,6 +1146,11 @@ h2 {
     gap: 10px;
   }
 
+  .board-cluster--eval-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
   .board-shell {
     padding: 10px;
   }
@@ -995,6 +1168,15 @@ h2 {
   .player-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .player-side {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .player-timer {
+    width: 100%;
   }
 
   .captured-row {

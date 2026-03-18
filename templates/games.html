@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Saved Games</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell app-shell--narrow">
+      <section class="page-stack">
+        <section class="panel archive-page">
+          <p class="eyebrow">Archive</p>
+          <h1>Saved games</h1>
+          <p class="panel-note panel-note--support">
+            Every finished game is kept here so the board page can stay focused on play.
+          </p>
+          <div class="page-actions">
+            <a class="action-button action-button--secondary archive-link" href="{{ url_for('index') }}">
+              Back to board
+            </a>
+          </div>
+        </section>
+
+        <section class="panel archive-page">
+          {% if saved_games %}
+            <div class="saved-games">
+              {% for game in saved_games %}
+                <article class="saved-game">
+                  <div class="saved-game__top">
+                    <span class="saved-game__badge saved-game__badge--{{ game.player_result }}">
+                      {{ {"win": "Won", "loss": "Lost", "draw": "Draw"}[game.player_result] }}
+                    </span>
+                    <span class="saved-game__timestamp">{{ game.created_at | replace("T", " ") }}</span>
+                  </div>
+                  <strong class="saved-game__title">
+                    You as {{ "White" if game.player_color == "white" else "Black" }}
+                  </strong>
+                  <p class="saved-game__details">
+                    Skill {{ game.skill_level }} - Depth {{ game.depth }} - {{ game.move_count }} ply
+                  </p>
+                  <p class="saved-game__status">{{ game.status }}</p>
+                  <a
+                    class="action-button action-button--secondary saved-game__download-link"
+                    href="{{ url_for('download_saved_game_pgn', game_id=game.id) }}"
+                  >
+                    Download PGN
+                  </a>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="saved-games__empty">Finished games will appear here.</p>
+          {% endif %}
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

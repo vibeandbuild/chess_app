@@ -23,10 +23,13 @@
                 </span>
               </div>
             </div>
-            <div id="captured-black" class="captured-row" aria-label="Black pieces you have captured"></div>
+            <div class="player-side">
+              <div id="engine-timer" class="player-timer player-timer--black" role="timer" aria-live="off">03:00</div>
+              <div id="captured-black" class="captured-row" aria-label="Black pieces you have captured"></div>
+            </div>
           </div>
 
-          <div class="board-cluster">
+          <div class="board-cluster" id="board-cluster">
             <div class="eval-meter" id="eval-meter" aria-hidden="true">
               <span class="eval-meter__label" id="eval-meter-label">0.00</span>
             </div>
@@ -80,7 +83,10 @@
                 </span>
               </div>
             </div>
-            <div id="captured-white" class="captured-row" aria-label="White pieces Stockfish has captured"></div>
+            <div class="player-side">
+              <div id="player-timer" class="player-timer player-timer--white" role="timer" aria-live="off">03:00</div>
+              <div id="captured-white" class="captured-row" aria-label="White pieces Stockfish has captured"></div>
+            </div>
           </div>
         </section>
 
@@ -88,26 +94,12 @@
           <section class="panel control-panel">
             <p class="eyebrow">Local Flask + Stockfish</p>
             <h1>Play Stockfish</h1>
-            <p class="lead">
-              A polished local board running on your engine. Move by click or drag, switch
-              sides instantly, and scrub through the played game without changing the real position.
-            </p>
-
-            <div class="side-picker" role="group" aria-label="Choose your side">
-              <button id="play-white" class="side-button side-button--active" type="button">Play White</button>
-              <button id="play-black" class="side-button" type="button">Play Black</button>
-            </div>
-
-            <div class="control-grid">
-              <label class="field" for="skill_level">
-                <span>Skill level</span>
-                <input id="skill_level" name="skill_level" type="number" min="0" max="20" value="{{ default_skill_level }}">
-              </label>
-
-              <label class="field" for="depth">
-                <span>Depth</span>
-                <input id="depth" name="depth" type="number" min="1" max="25" value="{{ default_depth }}">
-              </label>
+            <div class="setup-summary">
+              <p class="meta-label">Setup</p>
+              <strong id="setup-summary-title">White - Skill {{ default_skill_level }} - Depth {{ default_depth }} - No timer</strong>
+              <p id="setup-summary-note" class="panel-note panel-note--support">
+                Used the next time you start a game.
+              </p>
             </div>
 
             <div class="button-row">
@@ -115,10 +107,10 @@
               <button id="flip-board" class="action-button action-button--secondary" type="button">Flip board</button>
             </div>
 
-            <p class="engine-path">
-              Stockfish runs locally from the default `stockfish/` folder or the `STOCKFISH_PATH`
-              environment variable.
-            </p>
+            <label class="field field--toggle">
+              <span>Show EVAL bar</span>
+              <input id="show-eval-bar" name="show-eval-bar" type="checkbox" checked>
+            </label>
           </section>
 
           <section class="panel status-panel">
@@ -142,12 +134,10 @@
               </div>
             </div>
 
-            <label class="field field--textarea" for="fen-output">
-              <span>Current FEN</span>
-              <textarea id="fen-output" name="fen-output" rows="4" readonly>{{ default_fen }}</textarea>
-            </label>
-
-            <div class="button-row button-row--single">
+            <div class="button-row">
+              <button id="open-position" class="action-button action-button--secondary" type="button">
+                Position
+              </button>
               <button id="download-pgn" class="action-button action-button--secondary" type="button">
                 Download PGN
               </button>
@@ -174,32 +164,76 @@
             </div>
           </section>
 
-          <section class="panel hint-panel">
-            <p class="meta-label">Controls</p>
-            <h2>How to move</h2>
-            <p>
-              Click a piece and then a highlighted square, or drag it. While Stockfish is thinking, you can
-              set one premove and it will show in red. Right-click a square to mark it red, or right-drag
-              to draw arrows. Left click clears board annotations. Use the on-screen arrows or your keyboard's
-              left and right keys to review the game.
-            </p>
-          </section>
-
           <section class="panel saved-panel">
-            <div class="panel-head">
-              <div>
-                <p class="meta-label">Archive</p>
-                <h2>Saved games</h2>
-              </div>
-              <span id="saved-games-count" class="panel-note">0 saved</span>
-            </div>
-            <div id="saved-games" class="saved-games">
-              <p class="saved-games__empty">Finished games will appear here.</p>
-            </div>
+            <p class="meta-label">Archive</p>
+            <h2>Saved games</h2>
+            <p class="panel-note panel-note--support">
+              Finished games live on a separate archive page so the board stays clean.
+            </p>
+            <a class="action-button action-button--secondary archive-link" href="{{ url_for('saved_games_page') }}">
+              Open archive
+            </a>
           </section>
         </aside>
       </section>
     </main>
+
+    <section id="new-game-dialog" class="app-dialog" hidden>
+      <div class="app-dialog__card new-game-dialog__card" role="dialog" aria-modal="true" aria-labelledby="new-game-title">
+        <p class="meta-label">New game</p>
+        <h2 id="new-game-title">Choose your setup</h2>
+
+        <div class="side-picker" role="group" aria-label="Choose your side">
+          <button id="play-white" class="side-button side-button--active" type="button">White</button>
+          <button id="play-black" class="side-button" type="button">Black</button>
+          <button id="play-random" class="side-button" type="button">Random</button>
+        </div>
+
+        <div class="control-grid">
+          <label class="field" for="skill_level">
+            <span>Skill level</span>
+            <input id="skill_level" name="skill_level" type="number" min="0" max="20" value="{{ default_skill_level }}">
+          </label>
+
+          <label class="field" for="depth">
+            <span>Depth</span>
+            <input id="depth" name="depth" type="number" min="1" max="25" value="{{ default_depth }}">
+          </label>
+
+          <label class="field field--wide" for="time-control">
+            <span>Time control</span>
+            <select id="time-control" name="time-control">
+              <option value="none">No timer</option>
+              <option value="3+0">3+0</option>
+              <option value="3+2">3+2</option>
+              <option value="5+0">5+0</option>
+              <option value="10+0">10+0</option>
+              <option value="10+5">10+5</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="start-game" class="action-button" type="button">Start game</button>
+          <button id="cancel-new-game" class="action-button action-button--secondary" type="button">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="position-dialog" class="app-dialog" hidden>
+      <div class="app-dialog__card position-dialog__card" role="dialog" aria-modal="true" aria-labelledby="position-title">
+        <p class="meta-label">Position</p>
+        <h2 id="position-title">Current FEN</h2>
+        <label class="field field--textarea" for="fen-output">
+          <span>Current FEN</span>
+          <textarea id="fen-output" name="fen-output" rows="4" readonly>{{ default_fen }}</textarea>
+        </label>
+        <div class="button-row">
+          <button id="copy-fen" class="action-button" type="button">Copy FEN</button>
+          <button id="close-position" class="action-button action-button--secondary" type="button">Close</button>
+        </div>
+      </div>
+    </section>
 
     <section id="promotion-dialog" class="promotion-dialog" hidden>
       <div class="promotion-dialog__card" role="dialog" aria-modal="true" aria-labelledby="promotion-title">

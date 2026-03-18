@@ -36,26 +36,126 @@ const PIECE_ORDER = {
 const PROMOTION_ORDER = ["q", "r", "b", "n"];
 const SOUND_VOLUME = 0.9;
 const MOVE_ANIMATION_MS = 420;
+const CLOCK_TICK_MS = 100;
+const DEFAULT_TIME_CONTROL_KEY = "none";
+const TIME_CONTROL_PRESETS = {
+  none: {
+    label: "No timer",
+    baseMs: null,
+    incrementMs: 0,
+    lowTimeMs: 0,
+    pgn: "",
+  },
+  "3+0": {
+    label: "3+0",
+    baseMs: 3 * 60 * 1000,
+    incrementMs: 0,
+    lowTimeMs: 30 * 1000,
+    pgn: "180+0",
+  },
+  "3+2": {
+    label: "3+2",
+    baseMs: 3 * 60 * 1000,
+    incrementMs: 2 * 1000,
+    lowTimeMs: 30 * 1000,
+    pgn: "180+2",
+  },
+  "5+0": {
+    label: "5+0",
+    baseMs: 5 * 60 * 1000,
+    incrementMs: 0,
+    lowTimeMs: 30 * 1000,
+    pgn: "300+0",
+  },
+  "10+0": {
+    label: "10+0",
+    baseMs: 10 * 60 * 1000,
+    incrementMs: 0,
+    lowTimeMs: 60 * 1000,
+    pgn: "600+0",
+  },
+  "10+5": {
+    label: "10+5",
+    baseMs: 10 * 60 * 1000,
+    incrementMs: 5 * 1000,
+    lowTimeMs: 60 * 1000,
+    pgn: "600+5",
+  },
+};
+const UI_STORAGE_KEY = "chess-app-ui-state";
+
+function readUiState() {
+  try {
+    const raw = window.localStorage.getItem(UI_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiState(nextState) {
+  try {
+    const currentState = readUiState();
+    window.localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({ ...currentState, ...nextState }));
+  } catch {
+    // Ignore storage failures so the app keeps working in restricted browsers.
+  }
+}
+
+function resolveStoredNumber(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function resolvePlayerColorSelection(value) {
+  return value === "black" || value === "random" || value === "white"
+    ? value
+    : "white";
+}
+
+const initialUiState = readUiState();
+const initialSkillLevel = resolveStoredNumber(initialUiState.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+const initialDepth = resolveStoredNumber(initialUiState.depth, 1, 25, bootstrap.defaultDepth);
+const initialSelectedPlayerColor = resolvePlayerColorSelection(initialUiState.playerColorSelection);
 
 const refs = {
   board: document.querySelector("#board"),
   boardShell: document.querySelector("#board-shell"),
+  boardCluster: document.querySelector("#board-cluster"),
   arrowLayer: document.querySelector("#arrow-layer"),
+  setupSummaryTitle: document.querySelector("#setup-summary-title"),
+  setupSummaryNote: document.querySelector("#setup-summary-note"),
   statusText: document.querySelector("#status-text"),
   turnIndicator: document.querySelector("#turn-indicator"),
   engineMove: document.querySelector("#engine-move"),
   evaluationText: document.querySelector("#evaluation-text"),
   evalMeterLabel: document.querySelector("#eval-meter-label"),
+  evalMeter: document.querySelector("#eval-meter"),
+  showEvalBar: document.querySelector("#show-eval-bar"),
   fenOutput: document.querySelector("#fen-output"),
   error: document.querySelector("#error"),
   downloadPgn: document.querySelector("#download-pgn"),
+  openPosition: document.querySelector("#open-position"),
   moveList: document.querySelector("#move-list"),
   skillLevel: document.querySelector("#skill_level"),
   depth: document.querySelector("#depth"),
+  timeControl: document.querySelector("#time-control"),
   newGame: document.querySelector("#new-game"),
+  startGame: document.querySelector("#start-game"),
+  cancelNewGame: document.querySelector("#cancel-new-game"),
   flipBoard: document.querySelector("#flip-board"),
   playWhite: document.querySelector("#play-white"),
   playBlack: document.querySelector("#play-black"),
+  playRandom: document.querySelector("#play-random"),
   historyBack: document.querySelector("#history-back"),
   historyForward: document.querySelector("#history-forward"),
   historyLabel: document.querySelector("#history-label"),
@@ -63,23 +163,36 @@ const refs = {
   capturedWhite: document.querySelector("#captured-white"),
   savedGames: document.querySelector("#saved-games"),
   savedGamesCount: document.querySelector("#saved-games-count"),
+  newGameDialog: document.querySelector("#new-game-dialog"),
+  positionDialog: document.querySelector("#position-dialog"),
   promotionDialog: document.querySelector("#promotion-dialog"),
   promotionOptions: document.querySelector("#promotion-options"),
   cancelPromotion: document.querySelector("#cancel-promotion"),
+  copyFen: document.querySelector("#copy-fen"),
+  closePosition: document.querySelector("#close-position"),
   playerCardLabel: document.querySelector("#player-card-label"),
   engineCardLabel: document.querySelector("#engine-card-label"),
+  playerTimer: document.querySelector("#player-timer"),
+  engineTimer: document.querySelector("#engine-timer"),
   playerResultCrown: document.querySelector("#player-result-crown"),
   engineResultCrown: document.querySelector("#engine-result-crown"),
   resultOverlay: document.querySelector("#result-overlay"),
   resultOverlayTitle: document.querySelector("#result-overlay-title"),
 };
 
+refs.skillLevel.value = String(initialSkillLevel);
+refs.depth.value = String(initialDepth);
+
 const state = {
   liveTimeline: [cloneBoardState(bootstrap.initialState)],
   displayIndex: 0,
   selectedSquare: null,
+  gameStarted: false,
+  selectedPlayerColor: initialSelectedPlayerColor,
   orientation: "white",
   playerColor: "white",
+  gameSkillLevel: bootstrap.defaultSkillLevel,
+  gameDepth: bootstrap.defaultDepth,
   busy: false,
   pendingPromotion: null,
   moveHistory: [],
@@ -100,9 +213,16 @@ const state = {
   markedSquares: [],
   arrows: [],
   arrowDraft: null,
+  newGameDialogOpen: false,
+  positionDialogOpen: false,
+  fenCopyFeedback: "idle",
   savedGames: Array.isArray(bootstrap.savedGames) ? [...bootstrap.savedGames] : [],
   savedGameId: null,
   gameSessionId: generateSessionId(),
+  selectedTimeControlKey: resolveTimeControlKey(initialUiState.timeControlKey),
+  gameTimeControlKey: resolveTimeControlKey(initialUiState.timeControlKey),
+  clocks: createClockState(resolveTimeControlKey(initialUiState.timeControlKey)),
+  showEvalBar: initialUiState.showEvalBar !== false,
 };
 
 const soundBank = Object.fromEntries(
@@ -112,9 +232,241 @@ const soundBank = Object.fromEntries(
     return [key, audio];
   }),
 );
+let fenCopyResetTimer = null;
 
 function cloneBoardState(boardState) {
   return JSON.parse(JSON.stringify(boardState));
+}
+
+function resolveTimeControlKey(value) {
+  return Object.prototype.hasOwnProperty.call(TIME_CONTROL_PRESETS, value)
+    ? value
+    : DEFAULT_TIME_CONTROL_KEY;
+}
+
+function currentTimeControl() {
+  return TIME_CONTROL_PRESETS[state.gameTimeControlKey];
+}
+
+function hasTimedGame() {
+  return Boolean(currentTimeControl()?.baseMs);
+}
+
+function createClockState(timeControlKey) {
+  const preset = TIME_CONTROL_PRESETS[resolveTimeControlKey(timeControlKey)];
+  return {
+    whiteMs: preset.baseMs,
+    blackMs: preset.baseMs,
+    activeColor: null,
+    startedAt: null,
+    lowTimeAlerted: {
+      white: false,
+      black: false,
+    },
+  };
+}
+
+function clockKey(color) {
+  return color === "white" ? "whiteMs" : "blackMs";
+}
+
+function getClockSnapshot(now = Date.now()) {
+  let { whiteMs, blackMs } = state.clocks;
+  if (state.clocks.activeColor && state.clocks.startedAt != null && hasTimedGame()) {
+    const elapsedMs = Math.max(0, now - state.clocks.startedAt);
+    if (state.clocks.activeColor === "white") {
+      whiteMs = Math.max(0, whiteMs - elapsedMs);
+    } else {
+      blackMs = Math.max(0, blackMs - elapsedMs);
+    }
+  }
+
+  return { whiteMs, blackMs };
+}
+
+function setClockValue(color, value) {
+  if (value == null) {
+    state.clocks[clockKey(color)] = null;
+    return;
+  }
+
+  state.clocks[clockKey(color)] = Math.max(0, value);
+}
+
+function commitActiveClock(now = Date.now()) {
+  if (!state.clocks.activeColor || state.clocks.startedAt == null) {
+    return;
+  }
+
+  const snapshot = getClockSnapshot(now);
+  state.clocks.whiteMs = snapshot.whiteMs;
+  state.clocks.blackMs = snapshot.blackMs;
+  state.clocks.startedAt = now;
+}
+
+function pauseClocks(now = Date.now()) {
+  commitActiveClock(now);
+  state.clocks.activeColor = null;
+  state.clocks.startedAt = null;
+}
+
+function startClock(color, now = Date.now()) {
+  if (!hasTimedGame()) {
+    state.clocks.activeColor = null;
+    state.clocks.startedAt = null;
+    return;
+  }
+
+  state.clocks.activeColor = color;
+  state.clocks.startedAt = now;
+}
+
+function ensureClockRunning(color, now = Date.now()) {
+  if (state.clocks.activeColor === color && state.clocks.startedAt != null) {
+    return;
+  }
+
+  pauseClocks(now);
+  startClock(color, now);
+}
+
+function applyClockIncrement(color) {
+  if (!hasTimedGame()) {
+    return;
+  }
+
+  const incrementMs = currentTimeControl().incrementMs;
+  if (!incrementMs) {
+    return;
+  }
+
+  setClockValue(color, state.clocks[clockKey(color)] + incrementMs);
+}
+
+function completeTimedMove(moverColor, nextColor, now = Date.now()) {
+  if (state.clocks.activeColor === moverColor) {
+    commitActiveClock(now);
+  }
+  applyClockIncrement(moverColor);
+  if (nextColor) {
+    startClock(nextColor, now);
+    return;
+  }
+
+  pauseClocks(now);
+}
+
+function activeClockColor() {
+  return state.clocks.activeColor;
+}
+
+function formatClock(ms) {
+  if (ms == null) {
+    return "No timer";
+  }
+
+  const safeMs = Math.max(0, ms);
+  if (!safeMs) {
+    return "0:00";
+  }
+
+  if (safeMs < 60 * 1000) {
+    const wholeSeconds = Math.floor(safeMs / 1000);
+    const tenths = Math.floor((safeMs % 1000) / 100);
+    return `0:${String(wholeSeconds).padStart(2, "0")}.${tenths}`;
+  }
+
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function isLowTime(ms) {
+  return hasTimedGame() && ms > 0 && ms <= currentTimeControl().lowTimeMs;
+}
+
+function lowTimeSoundKey() {
+  if (soundBank.tenseconds) {
+    return "tenseconds";
+  }
+
+  if (soundBank.notify) {
+    return "notify";
+  }
+
+  return null;
+}
+
+function maybeAlertLowTime(snapshot) {
+  if (!hasTimedGame()) {
+    state.clocks.lowTimeAlerted.white = false;
+    state.clocks.lowTimeAlerted.black = false;
+    return;
+  }
+
+  const threshold = currentTimeControl().lowTimeMs;
+  const soundKey = lowTimeSoundKey();
+  [
+    ["white", snapshot.whiteMs],
+    ["black", snapshot.blackMs],
+  ].forEach(([color, remainingMs]) => {
+    if (remainingMs <= 0 || remainingMs > threshold) {
+      state.clocks.lowTimeAlerted[color] = false;
+      return;
+    }
+
+    if (!state.clocks.lowTimeAlerted[color] && soundKey) {
+      playSound(soundKey);
+    }
+    state.clocks.lowTimeAlerted[color] = true;
+  });
+}
+
+function createTimeoutBoardState(loserColor) {
+  const liveBoard = cloneBoardState(getLiveBoard());
+  const winner = loserColor === "white" ? "black" : "white";
+  return {
+    ...liveBoard,
+    legal_moves: [],
+    game_over: true,
+    result: winner === "white" ? "1-0" : "0-1",
+    winner,
+    status: `${winner === "white" ? "White" : "Black"} wins on time.`,
+    termination: "time forfeit",
+    timeout_loser: loserColor,
+  };
+}
+
+async function finishGameOnTime(loserColor) {
+  const liveBoard = getLiveBoard();
+  if (!liveBoard || liveBoard.game_over) {
+    return;
+  }
+
+  state.requestSerial += 1;
+  pauseClocks();
+  state.busy = false;
+  state.selectedSquare = null;
+  state.pendingPromotion = null;
+  state.transitioning = false;
+  state.evaluation = emptyEvaluation();
+  clearPieceDrag();
+  clearPremove();
+  clearPremoveLegalMoves();
+
+  const timeoutBoard = createTimeoutBoardState(loserColor);
+  state.liveTimeline[state.liveTimeline.length - 1] = timeoutBoard;
+  state.displayIndex = state.liveTimeline.length - 1;
+  render();
+
+  try {
+    await maybeSaveCompletedGame(timeoutBoard);
+    render();
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : "Could not save timed game";
+    render();
+  }
 }
 
 function equalEvaluation() {
@@ -267,6 +619,7 @@ function soundKeyForMove({ beforeBoard, afterBoard, moveUci, actor }) {
 function canQueuePremove() {
   const board = getDisplayBoard();
   return (
+    state.gameStarted &&
     isLatestView() &&
     !state.transitioning &&
     !state.pendingPromotion &&
@@ -502,6 +855,7 @@ function isPlayerPiece(piece) {
 function canMovePieces() {
   const board = getDisplayBoard();
   return (
+    state.gameStarted &&
     isLatestView() &&
     !state.busy &&
     !state.transitioning &&
@@ -991,14 +1345,26 @@ function appendPlyToHistory(moveUci) {
 }
 
 function currentGamePayload() {
-  return {
+  const liveBoard = getLiveBoard();
+  const payload = {
     moves: [...state.plyHistory],
     player_color: state.playerColor,
-    skill_level: sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel),
-    depth: sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth),
+    skill_level: state.gameSkillLevel,
+    depth: state.gameDepth,
     starting_fen: bootstrap.initialState.fen,
     session_id: state.gameSessionId,
+    time_control_label: hasTimedGame() ? currentTimeControl().label : "",
+    time_control_pgn: currentTimeControl().pgn,
   };
+
+  if (liveBoard?.game_over && liveBoard.termination === "time forfeit") {
+    payload.result_override = liveBoard.result;
+    payload.winner_override = liveBoard.winner;
+    payload.status_override = liveBoard.status;
+    payload.termination_override = "Time forfeit";
+  }
+
+  return payload;
 }
 
 function formatSavedGameDate(timestamp) {
@@ -1305,7 +1671,7 @@ function renderMoveList() {
   if (!state.moveHistory.length) {
     const empty = document.createElement("p");
     empty.className = "move-list__empty";
-    empty.textContent = "Make the first move.";
+    empty.textContent = state.gameStarted ? "Make the first move." : "Start a new game.";
     refs.moveList.append(empty);
     return;
   }
@@ -1362,6 +1728,10 @@ function renderMoveList() {
 }
 
 function renderSavedGames() {
+  if (!refs.savedGames || !refs.savedGamesCount) {
+    return;
+  }
+
   refs.savedGames.innerHTML = "";
   refs.savedGamesCount.textContent = `${state.savedGames.length} saved`;
 
@@ -1447,7 +1817,7 @@ function renderPromotionDialog() {
 
 function renderGameResult() {
   const board = getDisplayBoard();
-  const visible = isLatestView() && board.game_over;
+  const visible = state.gameStarted && isLatestView() && board.game_over;
   refs.resultOverlay.hidden = !visible;
   setCrownState(refs.playerResultCrown, null);
   setCrownState(refs.engineResultCrown, null);
@@ -1473,12 +1843,73 @@ function setEvaluation(evaluation) {
 }
 
 function renderSidePicker() {
-  refs.playWhite.classList.toggle("side-button--active", state.playerColor === "white");
-  refs.playBlack.classList.toggle("side-button--active", state.playerColor === "black");
+  refs.playWhite.classList.toggle("side-button--active", state.selectedPlayerColor === "white");
+  refs.playBlack.classList.toggle("side-button--active", state.selectedPlayerColor === "black");
+  refs.playRandom.classList.toggle("side-button--active", state.selectedPlayerColor === "random");
+
+  if (!state.gameStarted) {
+    if (state.selectedPlayerColor === "random") {
+      refs.playerCardLabel.textContent = "You play Random";
+      refs.engineCardLabel.textContent = "Stockfish takes the other side";
+      return;
+    }
+
+    refs.playerCardLabel.textContent = state.selectedPlayerColor === "white"
+      ? "You will play White"
+      : "You will play Black";
+    refs.engineCardLabel.textContent = state.selectedPlayerColor === "white"
+      ? "Stockfish will play Black"
+      : "Stockfish will play White";
+    return;
+  }
+
   refs.playerCardLabel.textContent = state.playerColor === "white" ? "You play White" : "You play Black";
   refs.engineCardLabel.textContent = state.playerColor === "white"
     ? "Stockfish plays Black"
     : "Stockfish plays White";
+}
+
+function renderClockElement(element, color, remainingMs, isActive) {
+  const lowTime = isLowTime(remainingMs);
+  element.textContent = formatClock(remainingMs);
+  element.classList.remove("player-timer--white", "player-timer--black");
+  element.classList.add(`player-timer--${color}`);
+  element.classList.toggle("player-timer--active", isActive);
+  element.classList.toggle("player-timer--inactive", !isActive);
+  element.classList.toggle("player-timer--low", lowTime);
+  element.style.color = lowTime ? "#fff" : "";
+}
+
+function renderClocks(snapshot = getClockSnapshot()) {
+  maybeAlertLowTime(snapshot);
+  refs.timeControl.value = state.selectedTimeControlKey;
+
+  const previewPlayerColor = state.gameStarted || state.selectedPlayerColor === "random"
+    ? state.playerColor
+    : state.selectedPlayerColor;
+  const playerColor = previewPlayerColor;
+  const stockfishColor = playerColor === "white" ? "black" : "white";
+  const activeColor = state.gameStarted ? activeClockColor() : null;
+  const remainingByColor = {
+    white: snapshot.whiteMs,
+    black: snapshot.blackMs,
+  };
+
+  renderClockElement(
+    refs.playerTimer,
+    playerColor,
+    remainingByColor[playerColor],
+    activeColor === playerColor,
+  );
+  renderClockElement(
+    refs.engineTimer,
+    stockfishColor,
+    remainingByColor[stockfishColor],
+    activeColor === stockfishColor,
+  );
+
+  refs.playerTimer.setAttribute("aria-label", `Your ${playerColor} clock: ${formatClock(remainingByColor[playerColor])}`);
+  refs.engineTimer.setAttribute("aria-label", `Stockfish ${stockfishColor} clock: ${formatClock(remainingByColor[stockfishColor])}`);
 }
 
 function historyLabelText() {
@@ -1493,6 +1924,27 @@ function historyLabelText() {
   return `Ply ${state.displayIndex}/${state.liveTimeline.length - 1}`;
 }
 
+function setupPlayerLabel(color) {
+  if (color === "random") {
+    return "Random";
+  }
+
+  return color === "white" ? "White" : "Black";
+}
+
+function setupTimeControlLabel() {
+  return TIME_CONTROL_PRESETS[state.selectedTimeControlKey]?.label || "No timer";
+}
+
+function renderSetupSummary() {
+  const skillLevel = sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  const depth = sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
+  refs.setupSummaryTitle.textContent = `${setupPlayerLabel(state.selectedPlayerColor)} · Skill ${skillLevel} · Depth ${depth} · ${setupTimeControlLabel()}`;
+  refs.setupSummaryNote.textContent = state.gameStarted
+    ? "These settings apply the next time you start a game."
+    : "Ready for the next game.";
+}
+
 function renderHistoryControls() {
   refs.historyBack.disabled = state.busy || state.transitioning || state.displayIndex === 0;
   refs.historyForward.disabled = state.busy || state.transitioning || state.displayIndex >= state.liveTimeline.length - 1;
@@ -1501,6 +1953,10 @@ function renderHistoryControls() {
 
 function deriveStatusText() {
   const board = getDisplayBoard();
+
+  if (!state.gameStarted) {
+    return "Choose your setup and start a new game.";
+  }
 
   if (!isLatestView()) {
     return `Viewing history. ${board.status}`;
@@ -1519,6 +1975,10 @@ function deriveStatusText() {
 
 function deriveTurnIndicator() {
   const board = getDisplayBoard();
+
+  if (!state.gameStarted) {
+    return "Not started";
+  }
 
   if (!isLatestView()) {
     return historyLabelText();
@@ -1539,12 +1999,25 @@ function deriveTurnIndicator() {
   return "Your turn";
 }
 
+function renderNewGameDialog() {
+  refs.newGameDialog.hidden = !state.newGameDialogOpen;
+}
+
+function renderPositionDialog() {
+  refs.positionDialog.hidden = !state.positionDialogOpen;
+  refs.copyFen.textContent = state.fenCopyFeedback === "copied" ? "Copied" : "Copy FEN";
+}
+
 function render() {
+  const clockSnapshot = getClockSnapshot();
   renderBoard();
   renderArrows();
   renderCapturedPieces();
   renderMoveList();
   renderSavedGames();
+  renderSetupSummary();
+  renderNewGameDialog();
+  renderPositionDialog();
   renderPromotionDialog();
   renderGameResult();
   renderSidePicker();
@@ -1555,6 +2028,10 @@ function render() {
   refs.fenOutput.value = getDisplayBoard().fen;
   refs.error.textContent = state.error;
   refs.downloadPgn.disabled = state.busy || !state.plyHistory.length;
+  refs.showEvalBar.checked = state.showEvalBar;
+  refs.evalMeter.hidden = !state.showEvalBar;
+  refs.boardCluster.classList.toggle("board-cluster--eval-hidden", !state.showEvalBar);
+  renderClocks(clockSnapshot);
   setEvaluation(state.evaluation);
 }
 
@@ -1670,10 +2147,12 @@ async function fetchJson(path, payload) {
 
 async function requestEngineTurn(fen, requestId) {
   const previousBoard = cloneBoardState(getLiveBoard());
+  const moverColor = previousBoard.turn;
+  ensureClockRunning(moverColor);
   const payload = {
     fen,
-    skill_level: sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel),
-    depth: sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth),
+    skill_level: state.gameSkillLevel,
+    depth: state.gameDepth,
   };
 
   const data = await fetchJson("/api/engine-turn", payload);
@@ -1699,6 +2178,7 @@ async function requestEngineTurn(fen, requestId) {
       actor: "engine",
     }),
   );
+  completeTimedMove(moverColor, data.board.game_over ? null : data.board.turn);
   state.lastEngineMove = data.engine_san || "-";
   state.evaluation = data.evaluation_details || equalEvaluation();
   if (data.board.game_over) {
@@ -1732,6 +2212,7 @@ async function submitPlayerMove(uci, options = {}) {
   const previousBoard = cloneBoardState(getLiveBoard());
   const requestId = state.requestSerial + 1;
   state.requestSerial = requestId;
+  pauseClocks();
   state.busy = true;
   state.selectedSquare = null;
   state.pendingPromotion = null;
@@ -1764,6 +2245,7 @@ async function submitPlayerMove(uci, options = {}) {
     }
 
     appendPlyToHistory(data.player_move);
+    completeTimedMove(state.playerColor, data.board.game_over ? null : data.board.turn);
     playSound(
       soundKeyForMove({
         beforeBoard: previousBoard,
@@ -1789,6 +2271,11 @@ async function submitPlayerMove(uci, options = {}) {
       return;
     }
 
+    if (!getLiveBoard().game_over && getLiveBoard().turn === state.playerColor) {
+      startClock(state.playerColor);
+    } else {
+      pauseClocks();
+    }
     state.busy = false;
     state.error = error instanceof Error ? error.message : "Move failed";
     playSound("illegal");
@@ -1796,11 +2283,22 @@ async function submitPlayerMove(uci, options = {}) {
   }
 }
 
-async function startNewGame(playerColor = state.playerColor, preserveOrientation = true) {
+function selectedPlayerColorForNewGame() {
+  if (state.selectedPlayerColor === "random") {
+    return Math.random() < 0.5 ? "white" : "black";
+  }
+
+  return state.selectedPlayerColor;
+}
+
+async function startNewGame(playerColor = selectedPlayerColorForNewGame(), preserveOrientation = true) {
   const requestId = state.requestSerial + 1;
   state.requestSerial = requestId;
+  state.gameStarted = true;
   state.playerColor = playerColor;
   state.orientation = preserveOrientation ? state.orientation : playerColor;
+  state.gameSkillLevel = sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  state.gameDepth = sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
   state.liveTimeline = [cloneBoardState(bootstrap.initialState)];
   state.displayIndex = 0;
   state.selectedSquare = null;
@@ -1819,6 +2317,11 @@ async function startNewGame(playerColor = state.playerColor, preserveOrientation
   state.arrowDraft = null;
   state.savedGameId = null;
   state.gameSessionId = generateSessionId();
+  state.gameTimeControlKey = state.selectedTimeControlKey;
+  state.clocks = createClockState(state.gameTimeControlKey);
+  if (playerColor === "white" && hasTimedGame()) {
+    startClock("white");
+  }
   render();
   playSound("gameStart");
 
@@ -1834,8 +2337,36 @@ async function startNewGame(playerColor = state.playerColor, preserveOrientation
       return;
     }
 
+    pauseClocks();
     state.busy = false;
     state.error = error instanceof Error ? error.message : "Stockfish move failed";
+    render();
+  }
+}
+
+async function copyFenToClipboard() {
+  const fen = getDisplayBoard().fen;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(fen);
+    } else {
+      refs.fenOutput.focus();
+      refs.fenOutput.select();
+      document.execCommand("copy");
+    }
+
+    state.fenCopyFeedback = "copied";
+    if (fenCopyResetTimer) {
+      window.clearTimeout(fenCopyResetTimer);
+    }
+    fenCopyResetTimer = window.setTimeout(() => {
+      state.fenCopyFeedback = "idle";
+      render();
+    }, 1400);
+    render();
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : "Could not copy FEN";
     render();
   }
 }
@@ -2054,6 +2585,25 @@ function handleDocumentMouseMove(event) {
 }
 
 function handleKeyNavigation(event) {
+  if (event.key === "Escape") {
+    if (state.positionDialogOpen) {
+      state.positionDialogOpen = false;
+      state.fenCopyFeedback = "idle";
+      render();
+      return;
+    }
+
+    if (state.newGameDialogOpen) {
+      state.newGameDialogOpen = false;
+      render();
+      return;
+    }
+  }
+
+  if (state.newGameDialogOpen || state.positionDialogOpen) {
+    return;
+  }
+
   if (state.transitioning) {
     return;
   }
@@ -2078,6 +2628,27 @@ function handleKeyNavigation(event) {
   }
 }
 
+function tickClocks() {
+  if (!state.gameStarted || !hasTimedGame()) {
+    return;
+  }
+
+  const activeColor = activeClockColor();
+  if (!activeColor) {
+    return;
+  }
+
+  const snapshot = getClockSnapshot();
+  renderClocks(snapshot);
+
+  if ((activeColor === "white" ? snapshot.whiteMs : snapshot.blackMs) > 0) {
+    return;
+  }
+
+  setClockValue(activeColor, 0);
+  void finishGameOnTime(activeColor);
+}
+
 refs.board.addEventListener("click", handleBoardClick);
 refs.board.addEventListener("contextmenu", (event) => {
   event.preventDefault();
@@ -2088,7 +2659,17 @@ document.addEventListener("mousemove", handleDocumentMouseMove);
 document.addEventListener("mouseup", handleDocumentMouseUp);
 document.addEventListener("keydown", handleKeyNavigation);
 refs.newGame.addEventListener("click", () => {
-  void startNewGame(state.playerColor, true);
+  state.positionDialogOpen = false;
+  state.newGameDialogOpen = true;
+  render();
+});
+refs.startGame.addEventListener("click", () => {
+  state.newGameDialogOpen = false;
+  void startNewGame(selectedPlayerColorForNewGame(), false);
+});
+refs.cancelNewGame.addEventListener("click", () => {
+  state.newGameDialogOpen = false;
+  render();
 });
 refs.downloadPgn.addEventListener("click", () => {
   void (async () => {
@@ -2102,11 +2683,26 @@ refs.downloadPgn.addEventListener("click", () => {
     }
   })();
 });
+refs.openPosition.addEventListener("click", () => {
+  state.newGameDialogOpen = false;
+  state.positionDialogOpen = true;
+  state.fenCopyFeedback = "idle";
+  render();
+});
 refs.playWhite.addEventListener("click", () => {
-  void startNewGame("white", false);
+  state.selectedPlayerColor = "white";
+  writeUiState({ playerColorSelection: state.selectedPlayerColor });
+  render();
 });
 refs.playBlack.addEventListener("click", () => {
-  void startNewGame("black", false);
+  state.selectedPlayerColor = "black";
+  writeUiState({ playerColorSelection: state.selectedPlayerColor });
+  render();
+});
+refs.playRandom.addEventListener("click", () => {
+  state.selectedPlayerColor = "random";
+  writeUiState({ playerColorSelection: state.selectedPlayerColor });
+  render();
 });
 refs.flipBoard.addEventListener("click", () => {
   clearPieceDrag();
@@ -2133,6 +2729,14 @@ refs.cancelPromotion.addEventListener("click", () => {
   state.pendingPromotion = null;
   render();
 });
+refs.copyFen.addEventListener("click", () => {
+  void copyFenToClipboard();
+});
+refs.closePosition.addEventListener("click", () => {
+  state.positionDialogOpen = false;
+  state.fenCopyFeedback = "idle";
+  render();
+});
 refs.promotionOptions.addEventListener("click", (event) => {
   const uci = event.target.closest(".promotion-button")?.dataset.uci;
   if (!uci) {
@@ -2146,12 +2750,43 @@ refs.promotionOptions.addEventListener("click", (event) => {
   });
 });
 refs.skillLevel.addEventListener("change", () => {
-  sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  const value = sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  writeUiState({ skillLevel: value });
 });
 refs.depth.addEventListener("change", () => {
-  sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
+  const value = sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
+  writeUiState({ depth: value });
 });
-refs.savedGames.addEventListener("click", (event) => {
+refs.timeControl.addEventListener("change", () => {
+  state.selectedTimeControlKey = resolveTimeControlKey(refs.timeControl.value);
+  writeUiState({ timeControlKey: state.selectedTimeControlKey });
+
+  if (!state.busy && !state.plyHistory.length && getLiveBoard().fen === bootstrap.initialState.fen) {
+    state.gameTimeControlKey = state.selectedTimeControlKey;
+    state.clocks = createClockState(state.gameTimeControlKey);
+  }
+
+  render();
+});
+refs.showEvalBar.addEventListener("change", () => {
+  state.showEvalBar = refs.showEvalBar.checked;
+  writeUiState({ showEvalBar: state.showEvalBar });
+  render();
+});
+refs.newGameDialog.addEventListener("click", (event) => {
+  if (event.target === refs.newGameDialog) {
+    state.newGameDialogOpen = false;
+    render();
+  }
+});
+refs.positionDialog.addEventListener("click", (event) => {
+  if (event.target === refs.positionDialog) {
+    state.positionDialogOpen = false;
+    state.fenCopyFeedback = "idle";
+    render();
+  }
+});
+refs.savedGames?.addEventListener("click", (event) => {
   const gameId = event.target.closest(".saved-game__download")?.dataset.gameId;
   if (!gameId) {
     return;
@@ -2164,6 +2799,7 @@ refs.savedGames.addEventListener("click", (event) => {
   link.remove();
 });
 
+window.setInterval(tickClocks, CLOCK_TICK_MS);
 render();
 
 
