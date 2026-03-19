@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Game Review</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="page-stack">
+        <section class="panel archive-page">
+          <p class="eyebrow">Review</p>
+          <h1>Saved game review</h1>
+          <p class="panel-note panel-note--support">
+            Step through the game, inspect the eval bar, and compare the top engine choices at each position.
+          </p>
+          <div class="page-actions">
+            <a class="action-button action-button--secondary archive-link" href="{{ url_for('saved_games_page') }}">
+              Back to archive
+            </a>
+            <a class="action-button action-button--secondary archive-link" href="{{ url_for('download_saved_game_pgn', game_id=saved_game.id) }}">
+              Download PGN
+            </a>
+          </div>
+        </section>
+
+        <section class="arena">
+          <section class="panel board-stage">
+            <div class="player-card">
+              <div class="player-heading">
+                <p class="player-role">Review board</p>
+                <div class="player-label-row">
+                  <strong id="review-position-title">Start position</strong>
+                </div>
+              </div>
+              <div class="player-side">
+                <div id="review-side-to-move" class="badge">White to move</div>
+              </div>
+            </div>
+
+            <div class="board-cluster" id="review-board-cluster">
+              <div class="eval-meter" id="review-eval-meter" aria-hidden="true">
+                <span class="eval-meter__label" id="review-eval-label">0.00</span>
+              </div>
+              <div class="board-shell">
+                <div id="review-board" class="board" aria-label="Review chessboard"></div>
+              </div>
+            </div>
+
+            <div class="review-controls">
+              <button id="review-start" class="history-button" type="button" aria-label="Go to start">|&larr;</button>
+              <button id="review-back" class="history-button" type="button" aria-label="Previous move">&larr;</button>
+              <span id="review-history-label" class="panel-note">Start</span>
+              <button id="review-forward" class="history-button" type="button" aria-label="Next move">&rarr;</button>
+              <button id="review-end" class="history-button" type="button" aria-label="Go to end">&rarr;|</button>
+              <button id="review-flip" class="action-button action-button--secondary review-flip" type="button">Flip board</button>
+            </div>
+          </section>
+
+          <aside class="sidebar">
+            <section class="panel status-panel">
+              <div class="status-head">
+                <div>
+                  <p class="meta-label">Saved game</p>
+                  <h2 id="review-status">{{ saved_game.status }}</h2>
+                </div>
+                <span class="saved-game__badge saved-game__badge--{{ saved_game.player_result }}">
+                  {{ {"win": "Won", "loss": "Lost", "draw": "Draw"}[saved_game.player_result] }}
+                </span>
+              </div>
+
+              <div class="stat-grid">
+                <div class="stat-card">
+                  <span>You played</span>
+                  <strong>{{ "White" if saved_game.player_color == "white" else "Black" }}</strong>
+                </div>
+                <div class="stat-card">
+                  <span>Game setup</span>
+                  <strong>Skill {{ saved_game.skill_level }} / Depth {{ saved_game.depth }}</strong>
+                </div>
+              </div>
+
+              <p class="panel-note panel-note--support" id="review-analysis-status">
+                Loading engine review...
+              </p>
+              <p id="review-error" class="error" role="alert"></p>
+            </section>
+
+            <section class="panel review-lines-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="meta-label">Engine review</p>
+                  <h2>Top moves</h2>
+                </div>
+              </div>
+              <div id="review-top-moves" class="review-top-moves"></div>
+            </section>
+
+            <section class="panel moves-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="meta-label">Moves</p>
+                  <h2>Move list</h2>
+                </div>
+              </div>
+              <div id="review-move-list" class="move-list"></div>
+            </section>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      window.CHESS_REVIEW_BOOTSTRAP = {{ {
+        "savedGame": saved_game,
+        "reviewGame": review_game,
+        "pieceImages": piece_images,
+        "soundFiles": sound_files,
+      } | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='review.js') }}"></script>
+  </body>
+</html>

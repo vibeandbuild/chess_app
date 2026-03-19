@@ -41,12 +41,20 @@
                     Skill {{ game.skill_level }} - Depth {{ game.depth }} - {{ game.move_count }} ply
                   </p>
                   <p class="saved-game__status">{{ game.status }}</p>
-                  <a
-                    class="action-button action-button--secondary saved-game__download-link"
-                    href="{{ url_for('download_saved_game_pgn', game_id=game.id) }}"
-                  >
-                    Download PGN
-                  </a>
+                  <div class="saved-game__actions">
+                    <a
+                      class="action-button saved-game__review-link"
+                      href="{{ url_for('saved_game_review_page', game_id=game.id) }}"
+                    >
+                      Review
+                    </a>
+                    <a
+                      class="action-button action-button--secondary saved-game__download-link"
+                      href="{{ url_for('download_saved_game_pgn', game_id=game.id) }}"
+                    >
+                      Download PGN
+                    </a>
+                  </div>
                 </article>
               {% endfor %}
             </div>

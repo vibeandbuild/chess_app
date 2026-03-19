@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -35,6 +36,20 @@ SOUND_FILE_NAMES = {
     "promote": "promote.mp3",
     "tenseconds": "tenseconds.mp3",
 }
+PIECE_IMAGE_NAMES = {
+    "P": "white_pawn.png",
+    "N": "white_knight.png",
+    "B": "white_bishop.png",
+    "R": "white_rook.png",
+    "Q": "white_queen.png",
+    "K": "white_king.png",
+    "p": "black_pawn.png",
+    "n": "black_knight.png",
+    "b": "black_bishop.png",
+    "r": "black_rook.png",
+    "q": "black_queen.png",
+    "k": "black_king.png",
+}
 
 app = Flask(__name__)
 
@@ -59,6 +74,13 @@ def get_sound_files() -> dict[str, str]:
         key: url_for("static", filename=f"sounds/{filename}")
         for key, filename in SOUND_FILE_NAMES.items()
         if (sounds_dir / filename).is_file()
+    }
+
+
+def get_piece_images() -> dict[str, str]:
+    return {
+        piece: url_for("static", filename=f"images/{filename}")
+        for piece, filename in PIECE_IMAGE_NAMES.items()
     }
 
 
@@ -428,6 +450,61 @@ def serialize_saved_game(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def build_review_move(*, ply_index: int, turn: int, color: str, san: str, uci: str) -> dict[str, Any]:
+    return {
+        "ply_index": ply_index,
+        "turn": turn,
+        "color": color,
+        "san": san,
+        "uci": uci,
+    }
+
+
+def build_saved_game_review(row: sqlite3.Row) -> dict[str, Any]:
+    game = chess.pgn.read_game(io.StringIO(row["pgn"]))
+    if game is None:
+        raise ValueError("Saved PGN could not be parsed")
+
+    board = game.board()
+    snapshots: list[dict[str, Any]] = [serialize_board(board)]
+    moves: list[dict[str, Any]] = []
+    node = game
+    ply_index = 0
+
+    while node.variations:
+        next_node = node.variation(0)
+        move = next_node.move
+        san = board.san(move)
+        uci = move.uci()
+        moves.append(
+            build_review_move(
+                ply_index=ply_index + 1,
+                turn=board.fullmove_number,
+                color=color_name(board.turn),
+                san=san,
+                uci=uci,
+            )
+        )
+        board.push(move)
+        ply_index += 1
+        snapshots.append(serialize_board(board, last_move=uci))
+        node = next_node
+
+    starting_fen = game.headers.get("FEN", chess.STARTING_FEN)
+    return {
+        "id": row["id"],
+        "starting_fen": starting_fen,
+        "result": row["result"],
+        "winner": row["winner"],
+        "status": row["status"],
+        "player_color": row["player_color"],
+        "skill_level": row["skill_level"],
+        "depth": row["depth"],
+        "snapshots": snapshots,
+        "moves": moves,
+    }
+
+
 def get_saved_game_row(game_id: int) -> sqlite3.Row | None:
     with get_db_connection() as connection:
         return connection.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
@@ -617,6 +694,86 @@ def analyze_position(fen: str, skill_level: int, depth: int) -> dict[str, object
     }
 
 
+def parse_analysis_line_count(payload: dict[str, Any]) -> int:
+    try:
+        line_count = int(payload.get("lines", 3))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lines must be an integer") from exc
+
+    if not 1 <= line_count <= 5:
+        raise ValueError("lines must be between 1 and 5")
+
+    return line_count
+
+
+def analyze_position_multi(fen: str, skill_level: int, depth: int, line_count: int) -> dict[str, Any]:
+    board = chess.Board(fen)
+    if board.is_game_over(claim_draw=True):
+        return {
+            "fen": board.fen(),
+            "evaluation": None,
+            "evaluation_details": format_evaluation(None),
+            "top_moves": [],
+            "skill_level": skill_level,
+            "depth": depth,
+        }
+
+    engine_path = get_engine_path()
+    if not engine_path.exists():
+        raise FileNotFoundError(
+            "Stockfish executable not found. Install it in stockfish/ or set STOCKFISH_PATH."
+        )
+
+    with chess.engine.SimpleEngine.popen_uci(str(engine_path)) as engine:
+        engine.configure({"Skill Level": skill_level})
+        infos = engine.analyse(
+            board,
+            chess.engine.Limit(depth=depth),
+            multipv=line_count,
+            info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
+        )
+
+    if isinstance(infos, dict):
+        infos = [infos]
+
+    top_moves: list[dict[str, Any]] = []
+    primary_evaluation = format_evaluation(None)
+    for info in infos:
+        pv = info.get("pv") or []
+        if not pv:
+            continue
+
+        move = pv[0]
+        evaluation_details = format_evaluation(info.get("score"))
+        if not top_moves:
+            primary_evaluation = evaluation_details
+
+        line_board = board.copy()
+        san_line: list[str] = []
+        for candidate in pv[:6]:
+            san_line.append(line_board.san(candidate))
+            line_board.push(candidate)
+
+        top_moves.append(
+            {
+                "uci": move.uci(),
+                "san": board.san(move),
+                "evaluation": evaluation_details["centipawns"],
+                "evaluation_details": evaluation_details,
+                "line": " ".join(san_line),
+            }
+        )
+
+    return {
+        "fen": board.fen(),
+        "evaluation": primary_evaluation["centipawns"],
+        "evaluation_details": primary_evaluation,
+        "top_moves": top_moves,
+        "skill_level": skill_level,
+        "depth": depth,
+    }
+
+
 @app.get("/")
 def index():
     return render_template(
@@ -635,6 +792,26 @@ def saved_games_page():
     return render_template("games.html", saved_games=list_saved_games(limit=None))
 
 
+@app.get("/games/<int:game_id>")
+def saved_game_review_page(game_id: int):
+    row = get_saved_game_row(game_id)
+    if row is None:
+        return jsonify({"error": "Game not found"}), 404
+
+    try:
+        review_game = build_saved_game_review(row)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return render_template(
+        "review.html",
+        saved_game=serialize_saved_game(row),
+        review_game=review_game,
+        piece_images=get_piece_images(),
+        sound_files=get_sound_files(),
+    )
+
+
 @app.post("/api/engine-move")
 def engine_move():
     payload = request.get_json(silent=True) or {}
@@ -647,6 +824,34 @@ def engine_move():
 
     try:
         analysis = analyze_position(fen=fen, skill_level=skill_level, depth=depth)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid FEN: {exc}"}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except chess.engine.EngineError as exc:
+        return jsonify({"error": f"Stockfish error: {exc}"}), 500
+
+    return jsonify(analysis)
+
+
+@app.post("/api/review-analysis")
+def review_analysis():
+    payload = request.get_json(silent=True) or {}
+    fen = payload.get("fen", chess.STARTING_FEN)
+
+    try:
+        skill_level, depth = parse_engine_settings(payload)
+        line_count = parse_analysis_line_count(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        analysis = analyze_position_multi(
+            fen=fen,
+            skill_level=skill_level,
+            depth=depth,
+            line_count=line_count,
+        )
     except ValueError as exc:
         return jsonify({"error": f"Invalid FEN: {exc}"}), 400
     except FileNotFoundError as exc:

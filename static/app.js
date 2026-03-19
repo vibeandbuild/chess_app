@@ -38,6 +38,9 @@ const SOUND_VOLUME = 0.9;
 const MOVE_ANIMATION_MS = 420;
 const CLOCK_TICK_MS = 100;
 const DEFAULT_TIME_CONTROL_KEY = "none";
+const GAME_MODE_REGULAR = "game";
+const GAME_MODE_OPENING_PRACTICE = "opening-practice";
+const OPENING_PRACTICE_THRESHOLD_CP = 100;
 const TIME_CONTROL_PRESETS = {
   none: {
     label: "No timer",
@@ -126,6 +129,9 @@ const initialUiState = readUiState();
 const initialSkillLevel = resolveStoredNumber(initialUiState.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
 const initialDepth = resolveStoredNumber(initialUiState.depth, 1, 25, bootstrap.defaultDepth);
 const initialSelectedPlayerColor = resolvePlayerColorSelection(initialUiState.playerColorSelection);
+const initialPracticeSkillLevel = resolveStoredNumber(initialUiState.practiceSkillLevel, 0, 20, bootstrap.defaultSkillLevel);
+const initialPracticeDepth = resolveStoredNumber(initialUiState.practiceDepth, 1, 25, bootstrap.defaultDepth);
+const initialSelectedPracticePlayerColor = resolvePlayerColorSelection(initialUiState.practicePlayerColorSelection);
 
 const refs = {
   board: document.querySelector("#board"),
@@ -138,6 +144,9 @@ const refs = {
   turnIndicator: document.querySelector("#turn-indicator"),
   engineMove: document.querySelector("#engine-move"),
   evaluationText: document.querySelector("#evaluation-text"),
+  practiceTopMovesPanel: document.querySelector("#practice-top-moves-panel"),
+  practiceTopMoves: document.querySelector("#practice-top-moves"),
+  practiceTopMovesTitle: document.querySelector("#practice-top-moves-title"),
   evalMeterLabel: document.querySelector("#eval-meter-label"),
   evalMeter: document.querySelector("#eval-meter"),
   showEvalBar: document.querySelector("#show-eval-bar"),
@@ -150,12 +159,20 @@ const refs = {
   depth: document.querySelector("#depth"),
   timeControl: document.querySelector("#time-control"),
   newGame: document.querySelector("#new-game"),
+  newPractice: document.querySelector("#new-practice"),
   startGame: document.querySelector("#start-game"),
   cancelNewGame: document.querySelector("#cancel-new-game"),
+  startPractice: document.querySelector("#start-practice"),
+  cancelPractice: document.querySelector("#cancel-practice"),
   flipBoard: document.querySelector("#flip-board"),
   playWhite: document.querySelector("#play-white"),
   playBlack: document.querySelector("#play-black"),
   playRandom: document.querySelector("#play-random"),
+  practiceSkillLevel: document.querySelector("#practice_skill_level"),
+  practiceDepth: document.querySelector("#practice_depth"),
+  practicePlayWhite: document.querySelector("#practice-play-white"),
+  practicePlayBlack: document.querySelector("#practice-play-black"),
+  practicePlayRandom: document.querySelector("#practice-play-random"),
   historyBack: document.querySelector("#history-back"),
   historyForward: document.querySelector("#history-forward"),
   historyLabel: document.querySelector("#history-label"),
@@ -164,6 +181,7 @@ const refs = {
   savedGames: document.querySelector("#saved-games"),
   savedGamesCount: document.querySelector("#saved-games-count"),
   newGameDialog: document.querySelector("#new-game-dialog"),
+  practiceDialog: document.querySelector("#practice-dialog"),
   positionDialog: document.querySelector("#position-dialog"),
   promotionDialog: document.querySelector("#promotion-dialog"),
   promotionOptions: document.querySelector("#promotion-options"),
@@ -182,13 +200,17 @@ const refs = {
 
 refs.skillLevel.value = String(initialSkillLevel);
 refs.depth.value = String(initialDepth);
+refs.practiceSkillLevel.value = String(initialPracticeSkillLevel);
+refs.practiceDepth.value = String(initialPracticeDepth);
 
 const state = {
   liveTimeline: [cloneBoardState(bootstrap.initialState)],
   displayIndex: 0,
   selectedSquare: null,
   gameStarted: false,
+  gameMode: GAME_MODE_REGULAR,
   selectedPlayerColor: initialSelectedPlayerColor,
+  selectedPracticePlayerColor: initialSelectedPracticePlayerColor,
   orientation: "white",
   playerColor: "white",
   gameSkillLevel: bootstrap.defaultSkillLevel,
@@ -214,6 +236,7 @@ const state = {
   arrows: [],
   arrowDraft: null,
   newGameDialogOpen: false,
+  practiceDialogOpen: false,
   positionDialogOpen: false,
   fenCopyFeedback: "idle",
   savedGames: Array.isArray(bootstrap.savedGames) ? [...bootstrap.savedGames] : [],
@@ -223,6 +246,8 @@ const state = {
   gameTimeControlKey: resolveTimeControlKey(initialUiState.timeControlKey),
   clocks: createClockState(resolveTimeControlKey(initialUiState.timeControlKey)),
   showEvalBar: initialUiState.showEvalBar !== false,
+  practiceTopMoves: [],
+  practiceTopMovesContext: "current",
 };
 
 const soundBank = Object.fromEntries(
@@ -246,6 +271,10 @@ function resolveTimeControlKey(value) {
 
 function currentTimeControl() {
   return TIME_CONTROL_PRESETS[state.gameTimeControlKey];
+}
+
+function isPracticeMode() {
+  return state.gameMode === GAME_MODE_OPENING_PRACTICE;
 }
 
 function hasTimedGame() {
@@ -485,6 +514,105 @@ function emptyEvaluation() {
     centipawns: null,
     label: "n/a",
   };
+}
+
+function openingPracticeThresholdLabel() {
+  return "+/-1.00";
+}
+
+function playerPerspectiveCentipawns(evaluation) {
+  if (!evaluation || !Number.isFinite(evaluation.centipawns)) {
+    return null;
+  }
+
+  return state.playerColor === "white" ? evaluation.centipawns : -evaluation.centipawns;
+}
+
+function playerPerspectiveEvaluationLabel(evaluation) {
+  if (!evaluation) {
+    return "n/a";
+  }
+
+  if (evaluation.type === "mate" && Number.isFinite(evaluation.value)) {
+    const mateValue = state.playerColor === "white" ? evaluation.value : -evaluation.value;
+    return `${mateValue >= 0 ? "+" : "-"}M${Math.abs(mateValue)}`;
+  }
+
+  const centipawns = playerPerspectiveCentipawns(evaluation);
+  if (!Number.isFinite(centipawns)) {
+    return evaluation.label ?? "n/a";
+  }
+
+  const pawns = centipawns / 100;
+  return `${pawns >= 0 ? "+" : ""}${pawns.toFixed(2)}`;
+}
+
+function deriveOpeningPracticeOutcome(evaluation) {
+  const centipawns = playerPerspectiveCentipawns(evaluation);
+  if (!Number.isFinite(centipawns) || Math.abs(centipawns) < OPENING_PRACTICE_THRESHOLD_CP) {
+    return null;
+  }
+
+  return centipawns > 0 ? "win" : "loss";
+}
+
+function createOpeningPracticeResultBoard(boardState, evaluation) {
+  const practiceResult = deriveOpeningPracticeOutcome(evaluation);
+  if (!practiceResult) {
+    return null;
+  }
+
+  const winner = practiceResult === "win" ? state.playerColor : engineColor();
+  return {
+    ...cloneBoardState(boardState),
+    legal_moves: [],
+    game_over: true,
+    result: winner === "white" ? "1-0" : "0-1",
+    winner,
+    status: practiceResult === "win"
+      ? `Opening practice complete. Your eval reached ${playerPerspectiveEvaluationLabel(evaluation)}.`
+      : `Opening practice over. Your eval dropped to ${playerPerspectiveEvaluationLabel(evaluation)}.`,
+    termination: "opening practice",
+    custom_result_override: true,
+    practice_result: practiceResult,
+  };
+}
+
+function formatEngineLineText(move) {
+  const line = String(move?.line || "").trim();
+  if (!line) {
+    return move?.san || "";
+  }
+
+  return line;
+}
+
+function renderEngineLines(container, moves) {
+  container.innerHTML = "";
+
+  if (!Array.isArray(moves) || !moves.length) {
+    const empty = document.createElement("p");
+    empty.className = "move-list__empty";
+    empty.textContent = "No engine lines available.";
+    container.append(empty);
+    return;
+  }
+
+  moves.forEach((move) => {
+    const row = document.createElement("article");
+    row.className = "engine-line";
+
+    const score = document.createElement("span");
+    score.className = "engine-line__score";
+    score.textContent = move?.evaluation_details?.label || "n/a";
+
+    const text = document.createElement("div");
+    text.className = "engine-line__text";
+    text.textContent = formatEngineLineText(move);
+
+    row.append(score, text);
+    container.append(row);
+  });
 }
 
 function generateSessionId() {
@@ -1357,11 +1485,13 @@ function currentGamePayload() {
     time_control_pgn: currentTimeControl().pgn,
   };
 
-  if (liveBoard?.game_over && liveBoard.termination === "time forfeit") {
+  if (liveBoard?.game_over && liveBoard.custom_result_override) {
     payload.result_override = liveBoard.result;
     payload.winner_override = liveBoard.winner;
     payload.status_override = liveBoard.status;
-    payload.termination_override = "Time forfeit";
+    payload.termination_override = liveBoard.termination === "time forfeit"
+      ? "Time forfeit"
+      : "Opening practice";
   }
 
   return payload;
@@ -1416,6 +1546,10 @@ function derivePlayerResult(boardState) {
 }
 
 function resultOverlayTitle(boardState) {
+  if (boardState?.termination === "opening practice") {
+    return derivePlayerResult(boardState) === "win" ? "Practice won" : "Practice lost";
+  }
+
   const result = derivePlayerResult(boardState);
   if (result === "win") {
     return "You won";
@@ -1479,7 +1613,7 @@ function syncSavedGame(game) {
 }
 
 async function maybeSaveCompletedGame(boardState) {
-  if (!boardState.game_over || state.savedGameId || !state.plyHistory.length) {
+  if (!boardState.game_over || state.savedGameId || !state.plyHistory.length || isPracticeMode()) {
     return;
   }
 
@@ -1535,6 +1669,61 @@ async function appendLiveSnapshot(boardState, moveUci, requestId, options = {}) 
 
   state.liveTimeline.push(cloneBoardState(boardState));
   state.displayIndex = state.liveTimeline.length - 1;
+  render();
+  return true;
+}
+
+async function maybeResolveOpeningPractice(fen, requestId) {
+  if (!isPracticeMode()) {
+    return false;
+  }
+
+  const analysis = await fetchJson("/api/review-analysis", {
+    fen,
+    skill_level: state.gameSkillLevel,
+    depth: state.gameDepth,
+    lines: 3,
+  });
+  if (requestId !== state.requestSerial) {
+    return false;
+  }
+
+  state.evaluation = analysis.evaluation_details || equalEvaluation();
+  const outcome = deriveOpeningPracticeOutcome(state.evaluation);
+  let practiceTopMoves = Array.isArray(analysis.top_moves) ? analysis.top_moves : [];
+  let practiceTopMovesContext = "current";
+  const previousBoard = state.liveTimeline[state.liveTimeline.length - 2] || null;
+
+  if (outcome === "loss" && previousBoard?.fen) {
+    const previousAnalysis = await fetchJson("/api/review-analysis", {
+      fen: previousBoard.fen,
+      skill_level: state.gameSkillLevel,
+      depth: state.gameDepth,
+      lines: 3,
+    });
+    if (requestId !== state.requestSerial) {
+      return false;
+    }
+
+    practiceTopMoves = Array.isArray(previousAnalysis.top_moves) ? previousAnalysis.top_moves : [];
+    practiceTopMovesContext = "before-last-move";
+  }
+
+  state.practiceTopMoves = practiceTopMoves;
+  state.practiceTopMovesContext = practiceTopMovesContext;
+  const practiceBoard = createOpeningPracticeResultBoard(getLiveBoard(), state.evaluation);
+  if (!practiceBoard) {
+    return false;
+  }
+
+  pauseClocks();
+  state.busy = false;
+  state.lastEngineMove = "-";
+  clearPremove();
+  clearPremoveLegalMoves();
+  state.liveTimeline[state.liveTimeline.length - 1] = practiceBoard;
+  state.displayIndex = state.liveTimeline.length - 1;
+  playSound("gameEnd");
   render();
   return true;
 }
@@ -1831,6 +2020,32 @@ function renderGameResult() {
   refs.resultOverlayTitle.textContent = resultOverlayTitle(board);
 }
 
+function renderPracticeTopMoves() {
+  const board = getDisplayBoard();
+  const visible = Boolean(
+    refs.practiceTopMovesPanel
+      && isPracticeMode()
+      && state.gameStarted
+      && isLatestView()
+      && board.game_over
+      && board.termination === "opening practice",
+  );
+
+  refs.practiceTopMovesPanel.hidden = !visible;
+  if (!visible) {
+    refs.practiceTopMoves.innerHTML = "";
+    return;
+  }
+
+  if (refs.practiceTopMovesTitle) {
+    refs.practiceTopMovesTitle.textContent = state.practiceTopMovesContext === "before-last-move"
+      ? "Top moves before your last move"
+      : "Top moves";
+  }
+
+  renderEngineLines(refs.practiceTopMoves, state.practiceTopMoves);
+}
+
 function setEvaluation(evaluation) {
   const currentEvaluation = evaluation || equalEvaluation();
   const label = currentEvaluation.label ?? "n/a";
@@ -2020,7 +2235,93 @@ function render() {
   renderPositionDialog();
   renderPromotionDialog();
   renderGameResult();
+  renderPracticeTopMoves();
   renderSidePicker();
+  renderHistoryControls();
+  refs.statusText.textContent = deriveStatusText();
+  refs.turnIndicator.textContent = deriveTurnIndicator();
+  refs.engineMove.textContent = state.lastEngineMove;
+  refs.fenOutput.value = getDisplayBoard().fen;
+  refs.error.textContent = state.error;
+  refs.downloadPgn.disabled = state.busy || !state.plyHistory.length;
+  refs.showEvalBar.checked = state.showEvalBar;
+  refs.evalMeter.hidden = !state.showEvalBar;
+  refs.boardCluster.classList.toggle("board-cluster--eval-hidden", !state.showEvalBar);
+  renderClocks(clockSnapshot);
+  setEvaluation(state.evaluation);
+}
+
+function renderSetupSummary() {
+  if (state.gameStarted && isPracticeMode()) {
+    refs.setupSummaryTitle.textContent = `Opening practice - ${setupPlayerLabel(state.playerColor)} - Skill ${state.gameSkillLevel} - Depth ${state.gameDepth} - Eval ${openingPracticeThresholdLabel()}`;
+    refs.setupSummaryNote.textContent = "Practice run in progress.";
+    return;
+  }
+
+  const skillLevel = sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  const depth = sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
+  refs.setupSummaryTitle.textContent = `${setupPlayerLabel(state.selectedPlayerColor)} - Skill ${skillLevel} - Depth ${depth} - ${setupTimeControlLabel()}`;
+  refs.setupSummaryNote.textContent = state.gameStarted
+    ? "These settings apply the next time you start a game."
+    : "Ready for the next game.";
+}
+
+function deriveStatusText() {
+  const board = getDisplayBoard();
+
+  if (!state.gameStarted) {
+    return "Choose your setup and start a new game or opening practice.";
+  }
+
+  if (!isLatestView()) {
+    return `Viewing history. ${board.status}`;
+  }
+
+  if (board.game_over) {
+    return board.status;
+  }
+
+  if (isPracticeMode()) {
+    return `Opening practice. Crossing ${openingPracticeThresholdLabel()} ends the run.`;
+  }
+
+  if (board.in_check && board.turn === state.playerColor) {
+    return "Your king is in check.";
+  }
+
+  return board.status;
+}
+
+function renderNewGameDialog() {
+  refs.newGameDialog.hidden = !state.newGameDialogOpen;
+}
+
+function renderPracticeSidePicker() {
+  refs.practicePlayWhite.classList.toggle("side-button--active", state.selectedPracticePlayerColor === "white");
+  refs.practicePlayBlack.classList.toggle("side-button--active", state.selectedPracticePlayerColor === "black");
+  refs.practicePlayRandom.classList.toggle("side-button--active", state.selectedPracticePlayerColor === "random");
+}
+
+function renderPracticeDialog() {
+  refs.practiceDialog.hidden = !state.practiceDialogOpen;
+}
+
+function render() {
+  const clockSnapshot = getClockSnapshot();
+  renderBoard();
+  renderArrows();
+  renderCapturedPieces();
+  renderMoveList();
+  renderSavedGames();
+  renderSetupSummary();
+  renderNewGameDialog();
+  renderPracticeDialog();
+  renderPositionDialog();
+  renderPromotionDialog();
+  renderGameResult();
+  renderPracticeTopMoves();
+  renderSidePicker();
+  renderPracticeSidePicker();
   renderHistoryControls();
   refs.statusText.textContent = deriveStatusText();
   refs.turnIndicator.textContent = deriveTurnIndicator();
@@ -2145,7 +2446,14 @@ async function fetchJson(path, payload) {
   return data;
 }
 
-async function requestEngineTurn(fen, requestId) {
+async function requestEngineTurn(fen, requestId, options = {}) {
+  if (!options.skipPracticeCheck) {
+    const practiceResolved = await maybeResolveOpeningPractice(fen, requestId);
+    if (practiceResolved) {
+      return true;
+    }
+  }
+
   const previousBoard = cloneBoardState(getLiveBoard());
   const moverColor = previousBoard.turn;
   ensureClockRunning(moverColor);
@@ -2291,10 +2599,19 @@ function selectedPlayerColorForNewGame() {
   return state.selectedPlayerColor;
 }
 
+function selectedPlayerColorForPractice() {
+  if (state.selectedPracticePlayerColor === "random") {
+    return Math.random() < 0.5 ? "white" : "black";
+  }
+
+  return state.selectedPracticePlayerColor;
+}
+
 async function startNewGame(playerColor = selectedPlayerColorForNewGame(), preserveOrientation = true) {
   const requestId = state.requestSerial + 1;
   state.requestSerial = requestId;
   state.gameStarted = true;
+  state.gameMode = GAME_MODE_REGULAR;
   state.playerColor = playerColor;
   state.orientation = preserveOrientation ? state.orientation : playerColor;
   state.gameSkillLevel = sanitizeInput(refs.skillLevel, 0, 20, bootstrap.defaultSkillLevel);
@@ -2315,6 +2632,8 @@ async function startNewGame(playerColor = selectedPlayerColorForNewGame(), prese
   clearPremoveLegalMoves();
   state.arrows = [];
   state.arrowDraft = null;
+  state.practiceTopMoves = [];
+  state.practiceTopMovesContext = "current";
   state.savedGameId = null;
   state.gameSessionId = generateSessionId();
   state.gameTimeControlKey = state.selectedTimeControlKey;
@@ -2332,6 +2651,59 @@ async function startNewGame(playerColor = selectedPlayerColorForNewGame(), prese
   void preloadPremoveLegalMoves(bootstrap.initialState.fen);
   try {
     await requestEngineTurn(bootstrap.initialState.fen, requestId);
+  } catch (error) {
+    if (requestId !== state.requestSerial) {
+      return;
+    }
+
+    pauseClocks();
+    state.busy = false;
+    state.error = error instanceof Error ? error.message : "Stockfish move failed";
+    render();
+  }
+}
+
+async function startOpeningPractice(playerColor = selectedPlayerColorForPractice(), preserveOrientation = true) {
+  const requestId = state.requestSerial + 1;
+  state.requestSerial = requestId;
+  state.gameStarted = true;
+  state.gameMode = GAME_MODE_OPENING_PRACTICE;
+  state.playerColor = playerColor;
+  state.orientation = preserveOrientation ? state.orientation : playerColor;
+  state.gameSkillLevel = sanitizeInput(refs.practiceSkillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  state.gameDepth = sanitizeInput(refs.practiceDepth, 1, 25, bootstrap.defaultDepth);
+  state.liveTimeline = [cloneBoardState(bootstrap.initialState)];
+  state.displayIndex = 0;
+  state.selectedSquare = null;
+  state.busy = playerColor === "black";
+  state.pendingPromotion = null;
+  state.moveHistory = [];
+  state.plyHistory = [];
+  state.evaluation = equalEvaluation();
+  state.lastEngineMove = "-";
+  state.error = "";
+  clearPieceDrag();
+  state.transitioning = false;
+  clearPremove();
+  clearPremoveLegalMoves();
+  state.arrows = [];
+  state.arrowDraft = null;
+  state.practiceTopMoves = [];
+  state.practiceTopMovesContext = "current";
+  state.savedGameId = null;
+  state.gameSessionId = generateSessionId();
+  state.gameTimeControlKey = DEFAULT_TIME_CONTROL_KEY;
+  state.clocks = createClockState(state.gameTimeControlKey);
+  render();
+  playSound("gameStart");
+
+  if (playerColor !== "black") {
+    return;
+  }
+
+  void preloadPremoveLegalMoves(bootstrap.initialState.fen);
+  try {
+    await requestEngineTurn(bootstrap.initialState.fen, requestId, { skipPracticeCheck: true });
   } catch (error) {
     if (requestId !== state.requestSerial) {
       return;
@@ -2593,6 +2965,12 @@ function handleKeyNavigation(event) {
       return;
     }
 
+    if (state.practiceDialogOpen) {
+      state.practiceDialogOpen = false;
+      render();
+      return;
+    }
+
     if (state.newGameDialogOpen) {
       state.newGameDialogOpen = false;
       render();
@@ -2600,7 +2978,7 @@ function handleKeyNavigation(event) {
     }
   }
 
-  if (state.newGameDialogOpen || state.positionDialogOpen) {
+  if (state.newGameDialogOpen || state.practiceDialogOpen || state.positionDialogOpen) {
     return;
   }
 
@@ -2660,7 +3038,14 @@ document.addEventListener("mouseup", handleDocumentMouseUp);
 document.addEventListener("keydown", handleKeyNavigation);
 refs.newGame.addEventListener("click", () => {
   state.positionDialogOpen = false;
+  state.practiceDialogOpen = false;
   state.newGameDialogOpen = true;
+  render();
+});
+refs.newPractice.addEventListener("click", () => {
+  state.positionDialogOpen = false;
+  state.newGameDialogOpen = false;
+  state.practiceDialogOpen = true;
   render();
 });
 refs.startGame.addEventListener("click", () => {
@@ -2669,6 +3054,14 @@ refs.startGame.addEventListener("click", () => {
 });
 refs.cancelNewGame.addEventListener("click", () => {
   state.newGameDialogOpen = false;
+  render();
+});
+refs.startPractice.addEventListener("click", () => {
+  state.practiceDialogOpen = false;
+  void startOpeningPractice(selectedPlayerColorForPractice(), false);
+});
+refs.cancelPractice.addEventListener("click", () => {
+  state.practiceDialogOpen = false;
   render();
 });
 refs.downloadPgn.addEventListener("click", () => {
@@ -2685,6 +3078,7 @@ refs.downloadPgn.addEventListener("click", () => {
 });
 refs.openPosition.addEventListener("click", () => {
   state.newGameDialogOpen = false;
+  state.practiceDialogOpen = false;
   state.positionDialogOpen = true;
   state.fenCopyFeedback = "idle";
   render();
@@ -2702,6 +3096,21 @@ refs.playBlack.addEventListener("click", () => {
 refs.playRandom.addEventListener("click", () => {
   state.selectedPlayerColor = "random";
   writeUiState({ playerColorSelection: state.selectedPlayerColor });
+  render();
+});
+refs.practicePlayWhite.addEventListener("click", () => {
+  state.selectedPracticePlayerColor = "white";
+  writeUiState({ practicePlayerColorSelection: state.selectedPracticePlayerColor });
+  render();
+});
+refs.practicePlayBlack.addEventListener("click", () => {
+  state.selectedPracticePlayerColor = "black";
+  writeUiState({ practicePlayerColorSelection: state.selectedPracticePlayerColor });
+  render();
+});
+refs.practicePlayRandom.addEventListener("click", () => {
+  state.selectedPracticePlayerColor = "random";
+  writeUiState({ practicePlayerColorSelection: state.selectedPracticePlayerColor });
   render();
 });
 refs.flipBoard.addEventListener("click", () => {
@@ -2757,6 +3166,14 @@ refs.depth.addEventListener("change", () => {
   const value = sanitizeInput(refs.depth, 1, 25, bootstrap.defaultDepth);
   writeUiState({ depth: value });
 });
+refs.practiceSkillLevel.addEventListener("change", () => {
+  const value = sanitizeInput(refs.practiceSkillLevel, 0, 20, bootstrap.defaultSkillLevel);
+  writeUiState({ practiceSkillLevel: value });
+});
+refs.practiceDepth.addEventListener("change", () => {
+  const value = sanitizeInput(refs.practiceDepth, 1, 25, bootstrap.defaultDepth);
+  writeUiState({ practiceDepth: value });
+});
 refs.timeControl.addEventListener("change", () => {
   state.selectedTimeControlKey = resolveTimeControlKey(refs.timeControl.value);
   writeUiState({ timeControlKey: state.selectedTimeControlKey });
@@ -2776,6 +3193,12 @@ refs.showEvalBar.addEventListener("change", () => {
 refs.newGameDialog.addEventListener("click", (event) => {
   if (event.target === refs.newGameDialog) {
     state.newGameDialogOpen = false;
+    render();
+  }
+});
+refs.practiceDialog.addEventListener("click", (event) => {
+  if (event.target === refs.practiceDialog) {
+    state.practiceDialogOpen = false;
     render();
   }
 });

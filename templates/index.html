@@ -104,6 +104,10 @@
 
             <div class="button-row">
               <button id="new-game" class="action-button" type="button">New game</button>
+              <button id="new-practice" class="action-button action-button--secondary" type="button">New practice</button>
+            </div>
+
+            <div class="button-row button-row--single">
               <button id="flip-board" class="action-button action-button--secondary" type="button">Flip board</button>
             </div>
 
@@ -143,6 +147,16 @@
               </button>
             </div>
             <p class="panel-note panel-note--support">Finished games save automatically below.</p>
+
+            <div id="practice-top-moves-panel" class="practice-lines" hidden>
+              <div class="panel-head">
+                <div>
+                  <p class="meta-label">Engine review</p>
+                  <h2 id="practice-top-moves-title">Top moves</h2>
+                </div>
+              </div>
+              <div id="practice-top-moves" class="engine-lines"></div>
+            </div>
 
             <p id="error" class="error" role="alert"></p>
           </section>
@@ -231,6 +245,39 @@
         <div class="button-row">
           <button id="copy-fen" class="action-button" type="button">Copy FEN</button>
           <button id="close-position" class="action-button action-button--secondary" type="button">Close</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice-dialog" class="app-dialog" hidden>
+      <div class="app-dialog__card new-game-dialog__card" role="dialog" aria-modal="true" aria-labelledby="practice-title">
+        <p class="meta-label">Opening practice</p>
+        <h2 id="practice-title">Choose your setup</h2>
+        <p class="panel-note panel-note--support">
+          Practice ends as soon as the position reaches at least +1.00 or -1.00 evaluation after your move.
+        </p>
+
+        <div class="side-picker" role="group" aria-label="Choose your side for practice">
+          <button id="practice-play-white" class="side-button side-button--active" type="button">White</button>
+          <button id="practice-play-black" class="side-button" type="button">Black</button>
+          <button id="practice-play-random" class="side-button" type="button">Random</button>
+        </div>
+
+        <div class="control-grid">
+          <label class="field" for="practice_skill_level">
+            <span>Skill level</span>
+            <input id="practice_skill_level" name="practice_skill_level" type="number" min="0" max="20" value="{{ default_skill_level }}">
+          </label>
+
+          <label class="field" for="practice_depth">
+            <span>Depth</span>
+            <input id="practice_depth" name="practice_depth" type="number" min="1" max="25" value="{{ default_depth }}">
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="start-practice" class="action-button" type="button">Start practice</button>
+          <button id="cancel-practice" class="action-button action-button--secondary" type="button">Cancel</button>
         </div>
       </div>
     </section>
